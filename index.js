@@ -1,8 +1,26 @@
 require('dotenv').config({ override: true });
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
+const qrcodeImg = require('qrcode');
+const http = require('http');
 const fs = require('fs');
 const path = require('path');
+
+// ── QR code web server ─────────────────────────────────────────────────────────
+let latestQR = null;
+const PORT = process.env.PORT || 3000;
+http.createServer(async (req, res) => {
+    if (req.url === '/qr' && latestQR) {
+        const img = await qrcodeImg.toDataURL(latestQR, { width: 400 });
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(`<html><body style="display:flex;justify-content:center;align-items:center;height:100vh;background:#fff;margin:0"><img src="${img}" style="width:300px;height:300px"/></body></html>`);
+    } else if (req.url === '/qr') {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end('<html><body style="font-family:sans-serif;text-align:center;padding:50px"><h2>✅ Bot is authenticated — no QR needed</h2></body></html>');
+    } else {
+        res.writeHead(200); res.end('ok');
+    }
+}).listen(PORT, () => console.log(`🌐 QR server on port ${PORT}`));
 const { getAIResponse } = require('./ai');
 const { upsertLead, updateLead, getPendingFollowups, extractEmail } = require('./crm_client');
 
@@ -59,7 +77,8 @@ const client = new Client({
 });
 
 client.on('qr', (qr) => {
-    console.log('\n📱 סרוק QR:\n');
+    latestQR = qr;
+    console.log('\n📱 סרוק QR בדפדפן: /qr\n');
     qrcode.generate(qr, { small: true });
 });
 client.on('authenticated', () => console.log('✅ מאומת!'));
