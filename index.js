@@ -53,7 +53,7 @@ const client = new Client({
     authStrategy: new LocalAuth({ dataPath: './.wwebjs_auth' }),
     puppeteer: {
         headless: true,
-        executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        executablePath: process.env.CHROME_BIN || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
         args: ['--no-sandbox', '--disable-setuid-sandbox'],
     },
 });
