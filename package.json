@@ -1,6 +1,6 @@
 {
   "name": "drop-whatsapp-bot",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "WhatsApp AI bot for DROP - private DJ & production lessons by Steven Angel",
   "main": "index.js",
   "scripts": {
@@ -9,10 +9,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
-    "dotenv": "^16.4.7",
-    "qrcode": "^1.5.4",
-    "qrcode-terminal": "^0.12.0",
-    "whatsapp-web.js": "^1.26.0"
+    "dotenv": "^16.4.7"
   },
   "devDependencies": {
     "nodemon": "^3.1.9"

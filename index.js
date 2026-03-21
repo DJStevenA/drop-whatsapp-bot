@@ -1,37 +1,62 @@
 require('dotenv').config({ override: true });
-const { Client, LocalAuth } = require('whatsapp-web.js');
-const qrcode = require('qrcode-terminal');
-const qrcodeImg = require('qrcode');
-const http = require('http');
-const fs = require('fs');
-const path = require('path');
-
-// ── QR code web server ─────────────────────────────────────────────────────────
-let latestQR = null;
-const PORT = process.env.PORT || 3000;
-http.createServer(async (req, res) => {
-    if (req.url === '/qr' && latestQR) {
-        const img = await qrcodeImg.toDataURL(latestQR, { width: 400 });
-        res.writeHead(200, { 'Content-Type': 'text/html' });
-        res.end(`<html><body style="display:flex;justify-content:center;align-items:center;height:100vh;background:#fff;margin:0"><img src="${img}" style="width:300px;height:300px"/></body></html>`);
-    } else if (req.url === '/qr') {
-        res.writeHead(200, { 'Content-Type': 'text/html' });
-        res.end('<html><body style="font-family:sans-serif;text-align:center;padding:50px"><h2>✅ Bot is authenticated — no QR needed</h2></body></html>');
-    } else {
-        res.writeHead(200); res.end('ok');
-    }
-}).listen(PORT, () => console.log(`🌐 QR server on port ${PORT}`));
+const http  = require('http');
+const https = require('https');
+const fs    = require('fs');
+const path  = require('path');
 const { getAIResponse } = require('./ai');
 const { upsertLead, updateLead, getPendingFollowups, extractEmail } = require('./crm_client');
 
+// ── Green API config ──────────────────────────────────────────────────────────
+const GREEN_URL      = process.env.GREEN_API_URL || 'https://7107.api.greenapi.com';
+const GREEN_INSTANCE = process.env.GREEN_INSTANCE_ID || '7107544996';
+const GREEN_TOKEN    = process.env.GREEN_API_TOKEN || 'b213685ee00f4ea29922be6917fff18812ae2b6298e64754ab';
+
+async function sendGreenMessage(chatId, text) {
+    const url  = `${GREEN_URL}/waInstance${GREEN_INSTANCE}/sendMessage/${GREEN_TOKEN}`;
+    const body = JSON.stringify({ chatId, message: text });
+    return new Promise((resolve, reject) => {
+        const u = new URL(url);
+        const req = https.request({
+            hostname: u.hostname, path: u.pathname + u.search,
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+        }, (res) => {
+            let d = ''; res.on('data', c => d += c); res.on('end', () => resolve(d));
+        });
+        req.on('error', reject);
+        req.write(body); req.end();
+    });
+}
+
+// ── HTTP server (webhook + health) ───────────────────────────────────────────
+const PORT = process.env.PORT || 3000;
+const server = http.createServer(async (req, res) => {
+    if (req.method === 'POST' && req.url === '/webhook') {
+        let body = '';
+        req.on('data', c => body += c);
+        req.on('end', async () => {
+            res.writeHead(200); res.end('ok');
+            try {
+                const data = JSON.parse(body);
+                await handleWebhook(data);
+            } catch (err) {
+                console.error('❌ Webhook parse error:', err.message);
+            }
+        });
+    } else {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end('<html><body style="font-family:sans-serif;text-align:center;padding:50px"><h2>✅ DROP Bot is running (Green API)</h2></body></html>');
+    }
+});
+server.listen(PORT, () => console.log(`🌐 Webhook server on port ${PORT}`));
+
+// ── State ─────────────────────────────────────────────────────────────────────
 const conversations = new Map();
-const leadCache     = new Map();   // userId → { genres: Set, gender: null }
+const leadCache     = new Map();   // phone → { genres: Set, gender: null }
 const processedIds  = new Set();   // prevent duplicate replies
 const MAX_HISTORY   = 20;
-const BOT_NEW_LEAD  = 'new_lead';
-const BOT_EXISTING  = 'existing';
 
-// ── Blocked numbers (env + persistent file) ───────────────────────────────────
+// ── Blocked numbers ───────────────────────────────────────────────────────────
 const BLOCKED_FILE = path.join(__dirname, 'blocked.json');
 function loadBlocked() {
     try { return new Set(JSON.parse(fs.readFileSync(BLOCKED_FILE, 'utf8'))); }
@@ -42,21 +67,37 @@ function saveBlocked(set) {
 }
 const BLOCKED = loadBlocked();
 
-// ── Unsubscribe keywords ───────────────────────────────────────────────────────
+// ── Unsubscribe ───────────────────────────────────────────────────────────────
 const UNSUB_KEYWORDS = ['הסר', 'הסר אותי', 'הסר אותי מהרשימות', 'stop', 'unsubscribe'];
 function isUnsubRequest(text) {
     const t = text.trim().toLowerCase();
     return UNSUB_KEYWORDS.some(k => t === k || t.startsWith(k + ' '));
 }
 
-// ── Nudge state: one re-ignite message after 10 min silence ───────────────────
-const lastBotReply = new Map();   // userId → timestamp of last bot reply
-const nudgeSent    = new Set();   // userId → already nudged, wait for reply
-const NUDGE_DELAY  = 10 * 60 * 1000; // 10 minutes
+// ── Nudge ─────────────────────────────────────────────────────────────────────
+const lastBotReply = new Map();
+const nudgeSent    = new Set();
+const NUDGE_DELAY  = 10 * 60 * 1000;
+const NUDGE_MSG    = `היי! 😊 עדיין כאן אם יש לך שאלות על השיעורים עם סטיבן 🎧`;
 
-const NUDGE_MSG = `היי! 😊 עדיין כאן אם יש לך שאלות על השיעורים עם סטיבן 🎧`;
+async function checkNudges() {
+    const now = Date.now();
+    for (const [chatId, sentAt] of lastBotReply.entries()) {
+        if (nudgeSent.has(chatId)) continue;
+        if (now - sentAt < NUDGE_DELAY) continue;
+        try {
+            await sendGreenMessage(chatId, NUDGE_MSG);
+            nudgeSent.add(chatId);
+            lastBotReply.delete(chatId);
+            console.log(`💬 Nudge → ${chatId}`);
+        } catch (err) {
+            console.error(`❌ Nudge failed (${chatId}):`, err.message);
+        }
+    }
+}
+setInterval(checkNudges, 60 * 1000);
 
-// ── Follow-up message ─────────────────────────────────────────────────────────
+// ── Follow-up ─────────────────────────────────────────────────────────────────
 const FOLLOWUP_MSG = (name) =>
 `היי${name ? ' ' + name : ''}! מיני סטיבן כאן 👋
 
@@ -66,88 +107,31 @@ const FOLLOWUP_MSG = (name) =>
 ואם תרצ/י לקבוע שיחה קצרה:
 https://calendly.com/dj-steven-angel/15-min-zoom?back=1`;
 
-// ── WhatsApp client ───────────────────────────────────────────────────────────
-const client = new Client({
-    authStrategy: new LocalAuth({ dataPath: './.wwebjs_auth' }),
-    puppeteer: {
-        headless: true,
-        executablePath: process.env.CHROME_BIN || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
-    },
-});
-
-client.on('qr', (qr) => {
-    latestQR = qr;
-    console.log('\n📱 סרוק QR בדפדפן: /qr\n');
-    qrcode.generate(qr, { small: true });
-});
-client.on('authenticated', () => console.log('✅ מאומת!'));
-client.on('ready', () => {
-    console.log('🚀 הבוט פעיל!');
-
-    // Nudge checker — runs every minute
-    setInterval(checkNudges, 60 * 1000);
-
-    // CRM follow-ups — only when CRM is configured
-    if (process.env.CRM_API_URL && !process.env.CRM_API_URL.includes('YOUR-APP')) {
-        setInterval(sendPendingFollowups, 60 * 60 * 1000);
-        sendPendingFollowups();
-    }
-});
-client.on('disconnected', (r) => console.log('⚠️ התנתק:', r));
-
-// ── Nudge checker ─────────────────────────────────────────────────────────────
-async function checkNudges() {
-    const now = Date.now();
-    for (const [userId, sentAt] of lastBotReply.entries()) {
-        if (nudgeSent.has(userId)) continue;
-        if (now - sentAt < NUDGE_DELAY) continue;
-
-        try {
-            await client.sendMessage(userId, NUDGE_MSG);
-            nudgeSent.add(userId);
-            lastBotReply.delete(userId);
-            console.log(`💬 Nudge נשלח → ${userId}`);
-        } catch (err) {
-            console.error(`❌ Nudge נכשל (${userId}):`, err.message);
-        }
-    }
-}
-
-// ── Follow-up sender ──────────────────────────────────────────────────────────
 async function sendPendingFollowups() {
     const leads = await getPendingFollowups();
-    if (leads.length === 0) return;
-
+    if (!leads.length) return;
     console.log(`\n📬 שולח ${leads.length} פולו-אפים...`);
     for (const lead of leads) {
         try {
             const chatId = lead.phone + '@c.us';
-            const msg    = FOLLOWUP_MSG(lead.name || lead.whatsapp_name);
-            await client.sendMessage(chatId, msg);
-
+            await sendGreenMessage(chatId, FOLLOWUP_MSG(lead.name || lead.whatsapp_name));
             await updateLead(lead.phone, {
                 followup_count:   (lead.followup_count || 0) + 1,
                 last_followup_at: new Date().toISOString(),
                 status:           'contacted',
             });
-            console.log(`📤 פולו-אפ נשלח → ${lead.phone}`);
+            console.log(`📤 פולו-אפ → ${lead.phone}`);
         } catch (err) {
             console.error(`❌ פולו-אפ נכשל (${lead.phone}):`, err.message);
         }
     }
 }
-
-// ── Bot type ──────────────────────────────────────────────────────────────────
-async function getBotType(message) {
-    try {
-        const contact = await message.getContact();
-        return contact.isMyContact ? BOT_EXISTING : BOT_NEW_LEAD;
-    } catch { return BOT_NEW_LEAD; }
+if (process.env.CRM_API_URL && !process.env.CRM_API_URL.includes('YOUR-APP')) {
+    setInterval(sendPendingFollowups, 60 * 60 * 1000);
+    sendPendingFollowups();
 }
 
-// ── Extract name from message ─────────────────────────────────────────────────
-// Words that are NOT names but could be captured by "אני X" patterns
+// ── Name / genre / gender helpers ─────────────────────────────────────────────
 const NOT_A_NAME = new Set([
     'מתביישת','מתבייש','מתעניין','מתעניינת','מתכוון','מתכוונת','מחפש','מחפשת',
     'רוצה','רוצים','צריך','צריכה','יודע','יודעת','גר','גרה','בא','באה',
@@ -169,7 +153,6 @@ function extractName(text) {
         if (m && m[1]) {
             const candidate = m[1].trim();
             if (NOT_A_NAME.has(candidate)) continue;
-            // Skip words that look like Hebrew verbs (start with מ/ל/ת/י and > 5 chars)
             if (candidate.length > 7 && /^[מלתיה]/.test(candidate)) continue;
             return candidate;
         }
@@ -177,7 +160,6 @@ function extractName(text) {
     return null;
 }
 
-// ── Detect all genres mentioned in a message ──────────────────────────────────
 function detectAllGenres(text) {
     const t = text.toLowerCase();
     const found = [];
@@ -191,7 +173,6 @@ function detectAllGenres(text) {
     return found;
 }
 
-// ── Detect gender from Hebrew grammar ─────────────────────────────────────────
 function detectGender(text) {
     const femaleMarkers = ['מתעניינת','מחפשת','צריכה','רוצה ל','שמחה','מוכנה','מתחילה','מגיעה','אוהבת','עובדת','גרה','באה','ניסיתי ל','התחלתי','אני ת'];
     const maleMarkers   = ['מתעניין','מחפש','צריך','שמח','מוכן','מתחיל','מגיע','אוהב','עובד','גר','בא ל'];
@@ -200,27 +181,20 @@ function detectGender(text) {
     return null;
 }
 
-// ── Scan message for CRM data ─────────────────────────────────────────────────
 async function scanForCRMData(phone, userText, history = []) {
     const updates = {};
     const email   = extractEmail(userText);
     if (email) { updates.email = email; console.log(`📋 CRM: אימייל — ${email}`); }
 
     let name = extractName(userText);
-
-    // If no name found via patterns, check if bot just asked "מה שמך?"
-    // and user replied with a short standalone word — treat it as the name
     if (!name) {
         const lastBot = [...history].reverse().find(m => m.role === 'assistant');
         const askedForName = lastBot && /מה שמ/.test(lastBot.content);
         if (askedForName) {
             const standalone = userText.trim().match(/^([א-תa-zA-Z]{2,15})$/);
-            if (standalone && !NOT_A_NAME.has(standalone[1])) {
-                name = standalone[1];
-            }
+            if (standalone && !NOT_A_NAME.has(standalone[1])) name = standalone[1];
         }
     }
-
     if (name) { updates.name = name; console.log(`📋 CRM: שם — ${name}`); }
 
     const lower = userText.toLowerCase();
@@ -230,7 +204,6 @@ async function scanForCRMData(phone, userText, history = []) {
         updates.interest = 'dj';
     }
 
-    // Accumulate all genres (merge new with previously seen for this user)
     const newGenres = detectAllGenres(userText);
     if (newGenres.length > 0) {
         if (!leadCache.has(phone)) leadCache.set(phone, { genres: new Set(), gender: null });
@@ -240,7 +213,6 @@ async function scanForCRMData(phone, userText, history = []) {
         console.log(`📋 CRM: סגנון — ${updates.genre}`);
     }
 
-    // Gender detection from Hebrew grammar
     const gender = detectGender(userText);
     if (gender) {
         if (!leadCache.has(phone)) leadCache.set(phone, { genres: new Set(), gender: null });
@@ -255,79 +227,77 @@ async function scanForCRMData(phone, userText, history = []) {
     if (Object.keys(updates).length > 0) await updateLead(phone, updates);
 }
 
-// ── Main message handler ──────────────────────────────────────────────────────
-client.on('message', async (message) => {
-    if (message.fromMe) return;
-    if (message.from === 'status@broadcast') return;
-    // Ignore group chats — only reply to direct (1-on-1) messages
-    if (message.from.endsWith('@g.us')) return;
-    if (message.isGroupMsg) return;
-    // Blocked numbers
-    const phoneNum = message.from.replace('@c.us', '').replace(/\D/g, '');
+// ── Webhook handler ───────────────────────────────────────────────────────────
+async function handleWebhook(data) {
+    // Only handle incoming text messages
+    if (data.typeWebhook !== 'incomingMessageReceived') return;
+    if (!data.messageData || data.messageData.typeMessage !== 'textMessage') return;
+
+    const chatId    = data.senderData?.chatId || data.senderData?.sender;
+    const msgId     = data.idMessage;
+    const userText  = data.messageData?.textMessageData?.textMessage?.trim();
+    const senderName = data.senderData?.senderName || null;
+
+    if (!chatId || !userText || !msgId) return;
+
+    // Ignore group chats
+    if (chatId.endsWith('@g.us')) return;
+
+    // Extract phone number
+    const phoneNum = chatId.replace('@c.us', '').replace(/\D/g, '');
+
+    // Block list
     if (BLOCKED.has(phoneNum)) return;
-    // Prevent processing the same message twice (e.g. multiple processes / WA replay)
-    if (processedIds.has(message.id._serialized)) return;
-    processedIds.add(message.id._serialized);
-    if (processedIds.size > 500) {
-        const first = processedIds.values().next().value;
-        processedIds.delete(first);
-    }
 
-    const userId   = message.from;
-    const userText = message.body?.trim();
-    if (!userText) return;
+    // Dedup
+    if (processedIds.has(msgId)) return;
+    processedIds.add(msgId);
+    if (processedIds.size > 500) processedIds.delete(processedIds.values().next().value);
 
-    // ── Unsubscribe request ────────────────────────────────────────────────────
+    console.log(`\n📩 ${chatId} | "${userText}"`);
+
+    // Unsubscribe
     if (isUnsubRequest(userText)) {
         BLOCKED.add(phoneNum);
         saveBlocked(BLOCKED);
-        nudgeSent.delete(userId);
-        lastBotReply.delete(userId);
-        updateLead(userId, { status: 'contacted', notes: '🚫 ביקש הסרה מהרשימות' }).catch(()=>{});
-        await message.reply('הוסרת מקבלת הודעות WhatsApp שלנו ✅\nלא תקבל/י הודעות נוספות.');
-        console.log(`🚫 הוסר מרשימות: ${phoneNum}`);
+        nudgeSent.delete(chatId);
+        lastBotReply.delete(chatId);
+        updateLead(phoneNum, { status: 'contacted', notes: '🚫 ביקש הסרה מהרשימות' }).catch(()=>{});
+        await sendGreenMessage(chatId, 'הוסרת מקבלת הודעות WhatsApp שלנו ✅\nלא תקבל/י הודעות נוספות.');
+        console.log(`🚫 הוסר: ${phoneNum}`);
         return;
     }
 
-    // User replied — reset nudge state
-    nudgeSent.delete(userId);
-    lastBotReply.delete(userId);
+    // Reset nudge
+    nudgeSent.delete(chatId);
+    lastBotReply.delete(chatId);
 
-    const botType = await getBotType(message);
-    console.log(`\n📩 ${userId} | ${botType === BOT_NEW_LEAD ? '🆕 ליד חדש' : '👤 קיים'} | "${userText}"`);
+    // Init conversation
+    if (!conversations.has(chatId)) conversations.set(chatId, []);
+    const history = conversations.get(chatId);
 
-    if (botType === BOT_EXISTING) { console.log('   ⏭️ לקוח קיים — לא מגיב'); return; }
-
-    // Init conversation history (needed before scanForCRMData)
-    if (!conversations.has(userId)) conversations.set(userId, []);
-    const history = conversations.get(userId);
-
-    // Save to CRM (fire-and-forget — לא חוסם את הבוט)
-    const contact = await message.getContact();
-    upsertLead({ phone: phoneNum, whatsapp_name: contact.pushname || null, source: 'whatsapp' }).catch(()=>{});
+    // CRM
+    upsertLead({ phone: phoneNum, whatsapp_name: senderName, source: 'whatsapp' }).catch(()=>{});
     scanForCRMData(phoneNum, userText, history).catch(()=>{});
 
-    // AI response
+    // AI
     history.push({ role: 'user', content: userText });
     while (history.length > MAX_HISTORY) history.splice(0, 2);
 
     try {
-        const reply = await getAIResponse(history, BOT_NEW_LEAD);
+        const reply = await getAIResponse(history, 'new_lead');
         history.push({ role: 'assistant', content: reply });
-        await message.reply(reply);
-        lastBotReply.set(userId, Date.now());   // start nudge countdown
+        await sendGreenMessage(chatId, reply);
+        lastBotReply.set(chatId, Date.now());
         console.log('📤 נשלח');
     } catch (err) {
         console.error('❌ שגיאת AI:', err.message);
-
-        await updateLead(userId, {
+        await updateLead(phoneNum, {
             status: 'contacted',
             notes: `⚠️ שגיאה טכנית ${new Date().toLocaleString('he-IL')} — לחזור ללקוח`,
-        });
-
+        }).catch(()=>{});
         history.pop();
-
-        await message.reply(
+        await sendGreenMessage(chatId,
 `היי! קיבלנו את ההודעה שלך 🙏
 
 נראה שיש אצלנו תקלה טכנית רגעית.
@@ -335,7 +305,6 @@ client.on('message', async (message) => {
 סטיבן יחזור אליך בהקדם — תוך שעות ספורות לכל היותר 🎧`
         );
     }
-});
+}
 
-console.log('⏳ מאתחל...\n');
-client.initialize();
+console.log('🚀 DROP Bot (Green API) מוכן!');
