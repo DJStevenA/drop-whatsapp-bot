@@ -28,8 +28,9 @@ async function loadSavedContacts() {
                     const all = Array.isArray(raw) ? raw : [];
                     const newSet = new Set();
                     for (const c of all) {
+                        // Only saved contacts have a non-empty name
                         if (!c.id || !c.id.endsWith('@c.us')) continue;
-                        // normalize: strip @c.us and non-digits
+                        if (!c.name || c.name.trim() === '') continue; // not saved in phonebook
                         const num = c.id.replace('@c.us', '').replace(/\D/g, '');
                         if (num) newSet.add(num);
                     }
