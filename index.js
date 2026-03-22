@@ -73,13 +73,11 @@ const clickTracker = new Map();
 const ytCounts = { 'yt-canary': 0, 'yt-hugel': 0, 'yt-swissa': 0 };
 
 function addTrackingUrls(text, phone) {
+    // YouTube only — Calendly links stay direct
     return text
         .replace(/https:\/\/www\.youtube\.com\/watch\?v=sPArmZafsX8/g, `${BASE_URL}/r?u=${phone}&t=yt-canary`)
         .replace(/https:\/\/www\.youtube\.com\/watch\?v=tPYhltoFTZo/g,  `${BASE_URL}/r?u=${phone}&t=yt-hugel`)
-        .replace(/https:\/\/youtu\.be\/64uzvnHU194[^\s]*/g,             `${BASE_URL}/r?u=${phone}&t=yt-swissa`)
-        .replace(/https:\/\/calendly\.com\/dj-steven-angel\/phone[^\s]*/g,        `${BASE_URL}/r?u=${phone}&t=cal-phone`)
-        .replace(/https:\/\/calendly\.com\/dj-steven-angel\/60min[^\s]*/g,        `${BASE_URL}/r?u=${phone}&t=cal-60min`)
-        .replace(/https:\/\/calendly\.com\/dj-steven-angel\/15-min-zoom[^\s]*/g,  `${BASE_URL}/r?u=${phone}&t=cal-zoom`);
+        .replace(/https:\/\/youtu\.be\/64uzvnHU194[^\s]*/g,             `${BASE_URL}/r?u=${phone}&t=yt-swissa`);
 }
 
 // Follow-up when clicked Calendly but didn't book
