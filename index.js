@@ -98,6 +98,40 @@ const PORT = process.env.PORT || 3000;
 const server = http.createServer(async (req, res) => {
     const urlObj = new URL(req.url, `http://localhost`);
 
+    // Health check — used by UptimeRobot / Railway
+    if (req.method === 'GET' && urlObj.pathname === '/health') {
+        // Test Green API connectivity with a lightweight status call
+        const statusUrl = `${GREEN_URL}/waInstance${GREEN_INSTANCE}/getStateInstance/${GREEN_TOKEN}`;
+        const u = new URL(statusUrl);
+        const checkGreen = () => new Promise((resolve) => {
+            const req2 = https.get({ hostname: u.hostname, path: u.pathname, timeout: 5000 }, (r) => {
+                let d = ''; r.on('data', c => d += c);
+                r.on('end', () => {
+                    try {
+                        const body = JSON.parse(d);
+                        resolve(body.stateInstance || 'unknown');
+                    } catch { resolve('parse_error'); }
+                });
+            });
+            req2.on('error', () => resolve('unreachable'));
+            req2.on('timeout', () => { req2.destroy(); resolve('timeout'); });
+        });
+
+        const greenState = await checkGreen();
+        const healthy = greenState === 'authorized';
+        const payload = {
+            status: healthy ? 'ok' : 'degraded',
+            green_api: greenState,
+            conversations: conversations.size,
+            contacts_filtered: savedContacts.size,
+            blocked: BLOCKED.size,
+            uptime_seconds: Math.floor(process.uptime()),
+        };
+        res.writeHead(healthy ? 200 : 503, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(payload));
+        return;
+    }
+
     // Calendly webhook
     if (req.method === 'POST' && urlObj.pathname === '/calendly') {
         let body = '';
