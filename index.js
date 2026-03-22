@@ -211,24 +211,56 @@ function isUnsubRequest(text) {
     return UNSUB_KEYWORDS.some(k => t === k || t.startsWith(k + ' '));
 }
 
-// ── Nudge ─────────────────────────────────────────────────────────────────────
+// ── Nudge (2 שלבים) ───────────────────────────────────────────────────────────
 const lastBotReply = new Map();
-const nudgeSent    = new Set();
-const NUDGE_DELAY  = 10 * 60 * 1000;
-const NUDGE_MSG    = `היי! 😊 עדיין כאן אם יש לך שאלות על השיעורים עם סטיבן 🎧`;
+const nudgeStage   = new Map(); // chatId → { stage: 0|1|2, nudge1At: timestamp|null }
+
+const NUDGE_DELAY_1 = 10 * 60 * 1000;        // 10 דקות → nudge 1
+const NUDGE_DELAY_2 = 24 * 60 * 60 * 1000;   // 24 שעות אחרי nudge 1 → nudge 2
+
+const NUDGE_MSG_1 = `היי! 😊 נראה שנעצרת — אני עדיין כאן אם יש לך שאלות על השיעורים עם סטיבן 🎧`;
+
+function NUDGE_MSG_2(name) {
+    return `היי${name ? ' ' + name : ''}! מיני סטיבן כאן 👋
+
+ראיתי שהתחלנו לדבר לפני כמה זמן — רציתי לבדוק אם עדיין מתעניינ/ת בשיעורים עם סטיבן 😊
+
+אם תרצ/י לקבוע שיחת הכרות קצרה של 15 דקות:
+https://calendly.com/dj-steven-angel/15-min-zoom?back=1`;
+}
+
+function getNameFromHistory(chatId) {
+    const history = conversations.get(chatId) || [];
+    for (let i = 0; i < history.length - 1; i++) {
+        if (history[i].role === 'assistant' && /מה שמ/.test(history[i].content)) {
+            const reply = history[i + 1]?.content?.trim();
+            const m = reply?.match(/^([א-תa-zA-Z]{2,12})$/);
+            if (m && !NOT_A_NAME.has(m[1])) return m[1];
+        }
+    }
+    return null;
+}
 
 async function checkNudges() {
     const now = Date.now();
-    for (const [chatId, sentAt] of lastBotReply.entries()) {
-        if (nudgeSent.has(chatId)) continue;
-        if (now - sentAt < NUDGE_DELAY) continue;
-        try {
-            await sendGreenMessage(chatId, NUDGE_MSG);
-            nudgeSent.add(chatId);
-            lastBotReply.delete(chatId);
-            console.log(`💬 Nudge → ${chatId}`);
-        } catch (err) {
-            console.error(`❌ Nudge failed (${chatId}):`, err.message);
+    for (const [chatId, lastAt] of lastBotReply.entries()) {
+        const state = nudgeStage.get(chatId) || { stage: 0, nudge1At: null };
+
+        if (state.stage === 0 && now - lastAt >= NUDGE_DELAY_1) {
+            try {
+                await sendGreenMessage(chatId, NUDGE_MSG_1);
+                nudgeStage.set(chatId, { stage: 1, nudge1At: Date.now() });
+                console.log(`💬 Nudge 1 → ${chatId}`);
+            } catch (err) { console.error(`❌ Nudge 1 failed (${chatId}):`, err.message); }
+
+        } else if (state.stage === 1 && state.nudge1At && now - state.nudge1At >= NUDGE_DELAY_2) {
+            const name = getNameFromHistory(chatId);
+            try {
+                await sendGreenMessage(chatId, NUDGE_MSG_2(name));
+                nudgeStage.set(chatId, { stage: 2, nudge1At: state.nudge1At });
+                lastBotReply.delete(chatId);
+                console.log(`💬 Nudge 2 → ${chatId}`);
+            } catch (err) { console.error(`❌ Nudge 2 failed (${chatId}):`, err.message); }
         }
     }
 }
@@ -397,7 +429,7 @@ async function handleWebhook(data) {
     if (isUnsubRequest(userText)) {
         BLOCKED.add(phoneNum);
         saveBlocked(BLOCKED);
-        nudgeSent.delete(chatId);
+        nudgeStage.delete(chatId);
         lastBotReply.delete(chatId);
         updateLead(phoneNum, { status: 'contacted', notes: '🚫 ביקש הסרה מהרשימות' }).catch(()=>{});
         await sendGreenMessage(chatId, 'הוסרת מקבלת הודעות WhatsApp שלנו ✅\nלא תקבל/י הודעות נוספות.');
@@ -406,7 +438,7 @@ async function handleWebhook(data) {
     }
 
     // Reset nudge
-    nudgeSent.delete(chatId);
+    nudgeStage.delete(chatId);
     lastBotReply.delete(chatId);
 
     // Init conversation
