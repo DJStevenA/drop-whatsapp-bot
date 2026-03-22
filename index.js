@@ -144,6 +144,68 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
+    // Stats dashboard
+    if (req.method === 'GET' && urlObj.pathname === '/stats') {
+        if (urlObj.searchParams.get('key') !== 'drop2026secret') { res.writeHead(403); res.end('forbidden'); return; }
+
+        let totalConvs = conversations.size;
+        let totalUserMsgs = 0;
+        let engaged = 0;       // >2 exchanges
+        let hotLeads = 0;      // >6 exchanges
+        let bookedCount = 0;
+
+        for (const [, history] of conversations.entries()) {
+            const userMsgs = history.filter(m => m.role === 'user').length;
+            totalUserMsgs += userMsgs;
+            if (userMsgs > 2)  engaged++;
+            if (userMsgs > 6)  hotLeads++;
+        }
+        for (const [, clicks] of clickTracker.entries()) {
+            if (Object.values(clicks).some(d => d.booked)) bookedCount++;
+        }
+        const avgMsgs = totalConvs ? (totalUserMsgs / totalConvs).toFixed(1) : 0;
+        const engRate = totalConvs ? Math.round((engaged / totalConvs) * 100) : 0;
+
+        const html = `<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DROP Bot — Stats</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, sans-serif; background: #0f0f0f; color: #fff; padding: 24px; }
+  h1 { font-size: 1.4rem; margin-bottom: 24px; color: #aaa; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 16px; }
+  .card { background: #1a1a1a; border-radius: 14px; padding: 20px 16px; text-align: center; }
+  .card .num { font-size: 2.4rem; font-weight: 700; color: #fff; }
+  .card .label { font-size: 0.78rem; color: #666; margin-top: 6px; }
+  .card.green .num { color: #4ade80; }
+  .card.yellow .num { color: #facc15; }
+  .card.red .num { color: #f87171; }
+  .card.blue .num { color: #60a5fa; }
+  .updated { margin-top: 20px; font-size: 0.72rem; color: #444; text-align: center; }
+</style>
+</head>
+<body>
+<h1>📊 DROP Bot — לוח מדידה</h1>
+<div class="grid">
+  <div class="card blue"><div class="num">${totalConvs}</div><div class="label">שיחות שהתחילו</div></div>
+  <div class="card green"><div class="num">${engaged}</div><div class="label">מעורבים (>2 הודעות)</div></div>
+  <div class="card yellow"><div class="num">${hotLeads}</div><div class="label">לידים חמים (>6 הודעות)</div></div>
+  <div class="card green"><div class="num">${bookedCount}</div><div class="label">קבעו שיחה</div></div>
+  <div class="card"><div class="num">${avgMsgs}</div><div class="label">ממוצע הודעות לשיחה</div></div>
+  <div class="card"><div class="num">${engRate}%</div><div class="label">אחוז מעורבות</div></div>
+  <div class="card red"><div class="num">${BLOCKED.size}</div><div class="label">הוסרו מהרשימה</div></div>
+  <div class="card"><div class="num">${savedContacts.size}</div><div class="label">אנשי קשר שמורים (מסוננים)</div></div>
+</div>
+<p class="updated">עודכן: ${new Date().toLocaleString('he-IL')}</p>
+</body></html>`;
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(html);
+        return;
+    }
+
     res.writeHead(200, { 'Content-Type': 'text/html' });
     res.end('<html><body style="font-family:sans-serif;text-align:center;padding:50px"><h2>✅ DROP Bot is running (Green API)</h2></body></html>');
 });
