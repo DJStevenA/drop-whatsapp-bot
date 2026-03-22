@@ -273,12 +273,26 @@ async function handleWebhook(data) {
     lastBotReply.delete(chatId);
 
     // Init conversation
+    const isNew = !conversations.has(chatId);
     if (!conversations.has(chatId)) conversations.set(chatId, []);
     const history = conversations.get(chatId);
 
     // CRM
     upsertLead({ phone: phoneNum, whatsapp_name: senderName, source: 'whatsapp' }).catch(()=>{});
     scanForCRMData(phoneNum, userText, history).catch(()=>{});
+
+    // First message — always send exact opening
+    if (isNew) {
+        const opening = `היי! הגעת למיני סטיבן — סטיבן כנראה קבור באולפן עכשיו 😄
+אשמח לענות על שאלות ולעזור לך לקבוע זמן עם סטיבן.
+מה שמך?`;
+        history.push({ role: 'user', content: userText });
+        history.push({ role: 'assistant', content: opening });
+        await sendGreenMessage(chatId, opening);
+        lastBotReply.set(chatId, Date.now());
+        console.log('📤 פתיחה נשלחה');
+        return;
+    }
 
     // AI
     history.push({ role: 'user', content: userText });
