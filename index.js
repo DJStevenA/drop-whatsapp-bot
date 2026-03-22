@@ -128,10 +128,27 @@ const CONV_FILE = process.env.DATA_DIR
     ? path.join(process.env.DATA_DIR, 'conversations.json')
     : path.join(__dirname, 'conversations.json');
 
+function cleanOldTrackingUrls(text) {
+    if (!text) return text;
+    const BASE = 'https://drop-whatsapp-bot-production.up.railway.app';
+    return text
+        .replace(new RegExp(BASE.replace(/\./g,'\\.') + '/r\\?u=[^&]+&t=cal-phone[^\\s]*', 'g'), 'https://calendly.com/dj-steven-angel/phone?back=1')
+        .replace(new RegExp(BASE.replace(/\./g,'\\.') + '/r\\?u=[^&]+&t=cal-60min[^\\s]*', 'g'), 'https://calendly.com/dj-steven-angel/60min?back=1')
+        .replace(new RegExp(BASE.replace(/\./g,'\\.') + '/r\\?u=[^&]+&t=cal-zoom[^\\s]*', 'g'), 'https://calendly.com/dj-steven-angel/15-min-zoom?back=1')
+        .replace(new RegExp(BASE.replace(/\./g,'\\.') + '/r\\?u=[^&]+&t=yt-canary[^\\s]*', 'g'), 'https://www.youtube.com/watch?v=sPArmZafsX8')
+        .replace(new RegExp(BASE.replace(/\./g,'\\.') + '/r\\?u=[^&]+&t=yt-hugel[^\\s]*', 'g'), 'https://www.youtube.com/watch?v=tPYhltoFTZo')
+        .replace(new RegExp(BASE.replace(/\./g,'\\.') + '/r\\?u=[^&]+&t=yt-swissa[^\\s]*', 'g'), 'https://youtu.be/64uzvnHU194');
+}
+
 function loadConversations() {
     try {
         const raw = JSON.parse(fs.readFileSync(CONV_FILE, 'utf8'));
-        return new Map(Object.entries(raw));
+        const map = new Map(Object.entries(raw));
+        // Clean old tracking URLs from saved history
+        for (const [chatId, history] of map.entries()) {
+            history.forEach(msg => { if (msg.content) msg.content = cleanOldTrackingUrls(msg.content); });
+        }
+        return map;
     } catch { return new Map(); }
 }
 
