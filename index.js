@@ -22,12 +22,18 @@ async function loadSavedContacts() {
             let d = ''; res.on('data', c => d += c);
             res.on('end', () => {
                 try {
-                    const contacts = JSON.parse(d);
-                    savedContacts = new Set(
-                        contacts
-                            .filter(c => c.isMyContact && c.type === 'contact')
-                            .map(c => c.id.replace('@c.us', '').replace(/\D/g, ''))
-                    );
+                    const raw = JSON.parse(d);
+                    // Accept any entry with an id ending in @c.us (individual chat)
+                    // regardless of isMyContact / type fields — Green API response varies
+                    const all = Array.isArray(raw) ? raw : [];
+                    const newSet = new Set();
+                    for (const c of all) {
+                        if (!c.id || !c.id.endsWith('@c.us')) continue;
+                        // normalize: strip @c.us and non-digits
+                        const num = c.id.replace('@c.us', '').replace(/\D/g, '');
+                        if (num) newSet.add(num);
+                    }
+                    savedContacts = newSet;
                     console.log(`📱 אנשי קשר שמורים: ${savedContacts.size}`);
                 } catch (e) { console.error('❌ loadSavedContacts:', e.message); }
                 resolve();
