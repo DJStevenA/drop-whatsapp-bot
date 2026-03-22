@@ -28,10 +28,127 @@ async function sendGreenMessage(chatId, text) {
     });
 }
 
-// ── HTTP server (webhook + health) ───────────────────────────────────────────
+// ── Click tracking ────────────────────────────────────────────────────────────
+const BASE_URL = process.env.BASE_URL || 'https://drop-whatsapp-bot-production.up.railway.app';
+
+const REDIRECT_MAP = {
+    'yt-canary': 'https://www.youtube.com/watch?v=sPArmZafsX8',
+    'yt-hugel':  'https://www.youtube.com/watch?v=tPYhltoFTZo',
+    'yt-swissa': 'https://youtu.be/64uzvnHU194',
+    'cal-phone': 'https://calendly.com/dj-steven-angel/phone',
+    'cal-60min': 'https://calendly.com/dj-steven-angel/60min',
+    'cal-zoom':  'https://calendly.com/dj-steven-angel/15-min-zoom',
+};
+
+// phone → { 'cal-phone': { clickedAt, booked, followupSent }, ... }
+const clickTracker = new Map();
+// yt link counts (just for logging)
+const ytCounts = { 'yt-canary': 0, 'yt-hugel': 0, 'yt-swissa': 0 };
+
+function addTrackingUrls(text, phone) {
+    return text
+        .replace(/https:\/\/www\.youtube\.com\/watch\?v=sPArmZafsX8/g, `${BASE_URL}/r?u=${phone}&t=yt-canary`)
+        .replace(/https:\/\/www\.youtube\.com\/watch\?v=tPYhltoFTZo/g,  `${BASE_URL}/r?u=${phone}&t=yt-hugel`)
+        .replace(/https:\/\/youtu\.be\/64uzvnHU194[^\s]*/g,             `${BASE_URL}/r?u=${phone}&t=yt-swissa`)
+        .replace(/https:\/\/calendly\.com\/dj-steven-angel\/phone[^\s]*/g,        `${BASE_URL}/r?u=${phone}&t=cal-phone`)
+        .replace(/https:\/\/calendly\.com\/dj-steven-angel\/60min[^\s]*/g,        `${BASE_URL}/r?u=${phone}&t=cal-60min`)
+        .replace(/https:\/\/calendly\.com\/dj-steven-angel\/15-min-zoom[^\s]*/g,  `${BASE_URL}/r?u=${phone}&t=cal-zoom`);
+}
+
+// Follow-up when clicked Calendly but didn't book
+const CLICK_FOLLOWUP_MSG = `היי! ראיתי שבדקת את האפשרויות לקביעת זמן עם סטיבן 😊
+
+אם יש משהו שעצר אותך — שאלה, ספק, או פשוט לא הגיע הזמן — אני כאן לעזור.
+מה קרה?`;
+
+async function checkClickFollowups() {
+    const now = Date.now();
+    const DELAY = 24 * 60 * 60 * 1000; // 24h
+    for (const [phone, clicks] of clickTracker.entries()) {
+        for (const [type, data] of Object.entries(clicks)) {
+            if (!type.startsWith('cal-')) continue;
+            if (data.booked || data.followupSent) continue;
+            if (now - data.clickedAt < DELAY) continue;
+            const chatId = phone + '@c.us';
+            try {
+                await sendGreenMessage(chatId, CLICK_FOLLOWUP_MSG);
+                data.followupSent = true;
+                console.log(`📨 Click follow-up → ${phone}`);
+            } catch (err) {
+                console.error(`❌ Click follow-up failed (${phone}):`, err.message);
+            }
+        }
+    }
+}
+setInterval(checkClickFollowups, 60 * 60 * 1000);
+
+// Calendly booking handler
+async function handleCalendlyWebhook(data) {
+    const event = data.event;
+    if (event !== 'invitee.created') return;
+    const name      = data.payload?.invitee?.name || '';
+    const eventName = data.payload?.event_type?.name || '';
+    console.log(`📅 Calendly booking: ${name} — ${eventName}`);
+
+    // Find most recent unbooked cal- click
+    let matchedPhone = null, mostRecent = 0;
+    for (const [phone, clicks] of clickTracker.entries()) {
+        for (const [type, d] of Object.entries(clicks)) {
+            if (type.startsWith('cal-') && !d.booked && d.clickedAt > mostRecent) {
+                mostRecent = d.clickedAt; matchedPhone = phone;
+            }
+        }
+    }
+    if (matchedPhone) {
+        const clicks = clickTracker.get(matchedPhone);
+        for (const type of Object.keys(clicks)) { if (type.startsWith('cal-')) clicks[type].booked = true; }
+        await updateLead(matchedPhone, {
+            status: 'booked',
+            notes: `✅ קבע: ${eventName} — ${new Date().toLocaleString('he-IL')}`,
+            ...(name && { name }),
+        }).catch(()=>{});
+        console.log(`✅ Calendly matched → ${matchedPhone}`);
+    } else {
+        console.log(`⚠️ Calendly booking: לא מצאנו phone לקישור ${name}`);
+    }
+}
+
+// ── HTTP server ───────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 const server = http.createServer(async (req, res) => {
-    if (req.method === 'POST' && req.url === '/webhook') {
+    const urlObj = new URL(req.url, `http://localhost`);
+
+    // Click tracking redirect
+    if (req.method === 'GET' && urlObj.pathname === '/r') {
+        const phone = urlObj.searchParams.get('u');
+        const type  = urlObj.searchParams.get('t');
+        const dest  = REDIRECT_MAP[type];
+        if (phone && type && dest) {
+            if (type.startsWith('yt-')) {
+                ytCounts[type] = (ytCounts[type] || 0) + 1;
+                console.log(`▶️ YouTube קליק: ${phone} → ${type} (סה"כ: ${ytCounts[type]})`);
+            } else if (type.startsWith('cal-')) {
+                if (!clickTracker.has(phone)) clickTracker.set(phone, {});
+                clickTracker.get(phone)[type] = { clickedAt: Date.now(), booked: false, followupSent: false };
+                console.log(`🔗 Calendly קליק: ${phone} → ${type}`);
+            }
+        }
+        res.writeHead(302, { 'Location': dest || BASE_URL }); res.end(); return;
+    }
+
+    // Calendly webhook
+    if (req.method === 'POST' && urlObj.pathname === '/calendly') {
+        let body = '';
+        req.on('data', c => body += c);
+        req.on('end', async () => {
+            res.writeHead(200); res.end('ok');
+            try { await handleCalendlyWebhook(JSON.parse(body)); }
+            catch (err) { console.error('❌ Calendly webhook error:', err.message); }
+        }); return;
+    }
+
+    // WhatsApp webhook
+    if (req.method === 'POST' && urlObj.pathname === '/webhook') {
         let body = '';
         req.on('data', c => body += c);
         req.on('end', async () => {
@@ -42,11 +159,11 @@ const server = http.createServer(async (req, res) => {
             } catch (err) {
                 console.error('❌ Webhook parse error:', err.message);
             }
-        });
-    } else {
-        res.writeHead(200, { 'Content-Type': 'text/html' });
-        res.end('<html><body style="font-family:sans-serif;text-align:center;padding:50px"><h2>✅ DROP Bot is running (Green API)</h2></body></html>');
+        }); return;
     }
+
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end('<html><body style="font-family:sans-serif;text-align:center;padding:50px"><h2>✅ DROP Bot is running (Green API)</h2></body></html>');
 });
 server.listen(PORT, () => console.log(`🌐 Webhook server on port ${PORT}`));
 
@@ -300,8 +417,9 @@ async function handleWebhook(data) {
 
     try {
         const reply = await getAIResponse(history, 'new_lead');
-        history.push({ role: 'assistant', content: reply });
-        await sendGreenMessage(chatId, reply);
+        const trackedReply = addTrackingUrls(reply, phoneNum);
+        history.push({ role: 'assistant', content: trackedReply });
+        await sendGreenMessage(chatId, trackedReply);
         lastBotReply.set(chatId, Date.now());
         console.log('📤 נשלח');
     } catch (err) {
