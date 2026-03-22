@@ -62,7 +62,10 @@ async function sendGreenMessage(chatId, text) {
 }
 
 
-// Calendly booking handler
+// ── Calendly booking handler ──────────────────────────────────────────────────
+// phone → timestamp of last Calendly click (for matching bookings)
+const calendlyClickLog = new Map(); // phone → { clickedAt, booked }
+
 async function handleCalendlyWebhook(data) {
     const event = data.event;
     if (event !== 'invitee.created') return;
@@ -70,18 +73,15 @@ async function handleCalendlyWebhook(data) {
     const eventName = data.payload?.event_type?.name || '';
     console.log(`📅 Calendly booking: ${name} — ${eventName}`);
 
-    // Find most recent unbooked cal- click
+    // Find most recent unbooked click
     let matchedPhone = null, mostRecent = 0;
-    for (const [phone, clicks] of clickTracker.entries()) {
-        for (const [type, d] of Object.entries(clicks)) {
-            if (type.startsWith('cal-') && !d.booked && d.clickedAt > mostRecent) {
-                mostRecent = d.clickedAt; matchedPhone = phone;
-            }
+    for (const [phone, d] of calendlyClickLog.entries()) {
+        if (!d.booked && d.clickedAt > mostRecent) {
+            mostRecent = d.clickedAt; matchedPhone = phone;
         }
     }
     if (matchedPhone) {
-        const clicks = clickTracker.get(matchedPhone);
-        for (const type of Object.keys(clicks)) { if (type.startsWith('cal-')) clicks[type].booked = true; }
+        calendlyClickLog.get(matchedPhone).booked = true;
         await updateLead(matchedPhone, {
             status: 'booked',
             notes: `✅ קבע: ${eventName} — ${new Date().toLocaleString('he-IL')}`,
@@ -160,8 +160,8 @@ const server = http.createServer(async (req, res) => {
             if (userMsgs > 2)  engaged++;
             if (userMsgs > 6)  hotLeads++;
         }
-        for (const [, clicks] of clickTracker.entries()) {
-            if (Object.values(clicks).some(d => d.booked)) bookedCount++;
+        for (const [, d] of calendlyClickLog.entries()) {
+            if (d.booked) bookedCount++;
         }
         const avgMsgs = totalConvs ? (totalUserMsgs / totalConvs).toFixed(1) : 0;
         const engRate = totalConvs ? Math.round((engaged / totalConvs) * 100) : 0;
