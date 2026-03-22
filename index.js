@@ -55,57 +55,6 @@ async function sendGreenMessage(chatId, text) {
     });
 }
 
-// ── Click tracking ────────────────────────────────────────────────────────────
-const BASE_URL = process.env.BASE_URL || 'https://drop-whatsapp-bot-production.up.railway.app';
-
-const REDIRECT_MAP = {
-    'yt-canary': 'https://www.youtube.com/watch?v=sPArmZafsX8',
-    'yt-hugel':  'https://www.youtube.com/watch?v=tPYhltoFTZo',
-    'yt-swissa': 'https://youtu.be/64uzvnHU194',
-    'cal-phone': 'https://calendly.com/dj-steven-angel/phone',
-    'cal-60min': 'https://calendly.com/dj-steven-angel/60min',
-    'cal-zoom':  'https://calendly.com/dj-steven-angel/15-min-zoom',
-};
-
-// phone → { 'cal-phone': { clickedAt, booked, followupSent }, ... }
-const clickTracker = new Map();
-// yt link counts (just for logging)
-const ytCounts = { 'yt-canary': 0, 'yt-hugel': 0, 'yt-swissa': 0 };
-
-function addTrackingUrls(text, phone) {
-    // YouTube only — Calendly links stay direct
-    return text
-        .replace(/https:\/\/www\.youtube\.com\/watch\?v=sPArmZafsX8/g, `${BASE_URL}/r?u=${phone}&t=yt-canary`)
-        .replace(/https:\/\/www\.youtube\.com\/watch\?v=tPYhltoFTZo/g,  `${BASE_URL}/r?u=${phone}&t=yt-hugel`)
-        .replace(/https:\/\/youtu\.be\/64uzvnHU194[^\s]*/g,             `${BASE_URL}/r?u=${phone}&t=yt-swissa`);
-}
-
-// Follow-up when clicked Calendly but didn't book
-const CLICK_FOLLOWUP_MSG = `היי! ראיתי שבדקת את האפשרויות לקביעת זמן עם סטיבן 😊
-
-אם יש משהו שעצר אותך — שאלה, ספק, או פשוט לא הגיע הזמן — אני כאן לעזור.
-מה קרה?`;
-
-async function checkClickFollowups() {
-    const now = Date.now();
-    const DELAY = 24 * 60 * 60 * 1000; // 24h
-    for (const [phone, clicks] of clickTracker.entries()) {
-        for (const [type, data] of Object.entries(clicks)) {
-            if (!type.startsWith('cal-')) continue;
-            if (data.booked || data.followupSent) continue;
-            if (now - data.clickedAt < DELAY) continue;
-            const chatId = phone + '@c.us';
-            try {
-                await sendGreenMessage(chatId, CLICK_FOLLOWUP_MSG);
-                data.followupSent = true;
-                console.log(`📨 Click follow-up → ${phone}`);
-            } catch (err) {
-                console.error(`❌ Click follow-up failed (${phone}):`, err.message);
-            }
-        }
-    }
-}
-setInterval(checkClickFollowups, 60 * 60 * 1000);
 
 // Calendly booking handler
 async function handleCalendlyWebhook(data) {
@@ -142,24 +91,6 @@ async function handleCalendlyWebhook(data) {
 const PORT = process.env.PORT || 3000;
 const server = http.createServer(async (req, res) => {
     const urlObj = new URL(req.url, `http://localhost`);
-
-    // Click tracking redirect
-    if (req.method === 'GET' && urlObj.pathname === '/r') {
-        const phone = urlObj.searchParams.get('u');
-        const type  = urlObj.searchParams.get('t');
-        const dest  = REDIRECT_MAP[type];
-        if (phone && type && dest) {
-            if (type.startsWith('yt-')) {
-                ytCounts[type] = (ytCounts[type] || 0) + 1;
-                console.log(`▶️ YouTube קליק: ${phone} → ${type} (סה"כ: ${ytCounts[type]})`);
-            } else if (type.startsWith('cal-')) {
-                if (!clickTracker.has(phone)) clickTracker.set(phone, {});
-                clickTracker.get(phone)[type] = { clickedAt: Date.now(), booked: false, followupSent: false };
-                console.log(`🔗 Calendly קליק: ${phone} → ${type}`);
-            }
-        }
-        res.writeHead(302, { 'Location': dest || BASE_URL }); res.end(); return;
-    }
 
     // Calendly webhook
     if (req.method === 'POST' && urlObj.pathname === '/calendly') {
@@ -498,10 +429,9 @@ async function handleWebhook(data) {
 
     try {
         const reply = await getAIResponse(history, 'new_lead');
-        const trackedReply = addTrackingUrls(reply, phoneNum);
-        history.push({ role: 'assistant', content: trackedReply });
+        history.push({ role: 'assistant', content: reply });
         saveConversations(conversations);
-        await sendGreenMessage(chatId, trackedReply);
+        await sendGreenMessage(chatId, reply);
         lastBotReply.set(chatId, Date.now());
         console.log('📤 נשלח');
     } catch (err) {
