@@ -11,6 +11,33 @@ const GREEN_URL      = process.env.GREEN_API_URL || 'https://7107.api.greenapi.c
 const GREEN_INSTANCE = process.env.GREEN_INSTANCE_ID || '7107544996';
 const GREEN_TOKEN    = process.env.GREEN_API_TOKEN || 'b213685ee00f4ea29922be6917fff18812ae2b6298e64754ab';
 
+// ── Saved contacts (bot ignores these) ────────────────────────────────────────
+let savedContacts = new Set();
+
+async function loadSavedContacts() {
+    const url = `${GREEN_URL}/waInstance${GREEN_INSTANCE}/getContacts/${GREEN_TOKEN}`;
+    return new Promise((resolve) => {
+        const u = new URL(url);
+        https.get({ hostname: u.hostname, path: u.pathname }, (res) => {
+            let d = ''; res.on('data', c => d += c);
+            res.on('end', () => {
+                try {
+                    const contacts = JSON.parse(d);
+                    savedContacts = new Set(
+                        contacts
+                            .filter(c => c.isMyContact && c.type === 'contact')
+                            .map(c => c.id.replace('@c.us', '').replace(/\D/g, ''))
+                    );
+                    console.log(`📱 אנשי קשר שמורים: ${savedContacts.size}`);
+                } catch (e) { console.error('❌ loadSavedContacts:', e.message); }
+                resolve();
+            });
+        }).on('error', (e) => { console.error('❌ loadSavedContacts req:', e.message); resolve(); });
+    });
+}
+loadSavedContacts();
+setInterval(loadSavedContacts, 30 * 60 * 1000); // רענון כל 30 דקות
+
 async function sendGreenMessage(chatId, text) {
     const url  = `${GREEN_URL}/waInstance${GREEN_INSTANCE}/sendMessage/${GREEN_TOKEN}`;
     const body = JSON.stringify({ chatId, message: text });
@@ -417,6 +444,9 @@ async function handleWebhook(data) {
 
     // Block list
     if (BLOCKED.has(phoneNum)) return;
+
+    // Saved contacts — bot only handles new leads (unsaved numbers)
+    if (savedContacts.has(phoneNum)) return;
 
     // Dedup
     if (processedIds.has(msgId)) return;
