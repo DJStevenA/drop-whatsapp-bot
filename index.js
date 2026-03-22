@@ -198,10 +198,16 @@ function saveBlocked(set) {
 const BLOCKED = loadBlocked();
 
 // ── Unsubscribe ───────────────────────────────────────────────────────────────
-const UNSUB_KEYWORDS = ['הסר', 'הסר אותי', 'הסר אותי מהרשימות', 'stop', 'unsubscribe'];
+const UNSUB_KEYWORDS = [
+    'הסר', 'הסר אותי', 'הסר אותי מהרשימות',
+    'לא לשלוח', 'לא לשלוח הודעות', 'אל תשלח', 'אל תשלחי',
+    'תפסיק', 'תפסיקי', 'תפסיק לשלוח', 'תפסיקי לשלוח',
+    'לא מעוניין', 'לא מעוניינת', 'לא רלוונטי',
+    'stop', 'unsubscribe',
+];
 function isUnsubRequest(text) {
     const t = text.trim().toLowerCase();
-    return UNSUB_KEYWORDS.some(k => t === k || t.startsWith(k + ' '));
+    return UNSUB_KEYWORDS.some(k => t === k || t.startsWith(k + ' ') || t.includes(k));
 }
 
 // ── Nudge (2 שלבים) ───────────────────────────────────────────────────────────
