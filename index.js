@@ -11,39 +11,6 @@ const GREEN_URL      = process.env.GREEN_API_URL || 'https://7107.api.greenapi.c
 const GREEN_INSTANCE = process.env.GREEN_INSTANCE_ID || '7107544996';
 const GREEN_TOKEN    = process.env.GREEN_API_TOKEN || 'b213685ee00f4ea29922be6917fff18812ae2b6298e64754ab';
 
-// ── Saved contacts (bot ignores these) ────────────────────────────────────────
-let savedContacts = new Set();
-
-async function loadSavedContacts() {
-    const url = `${GREEN_URL}/waInstance${GREEN_INSTANCE}/getContacts/${GREEN_TOKEN}`;
-    return new Promise((resolve) => {
-        const u = new URL(url);
-        https.get({ hostname: u.hostname, path: u.pathname }, (res) => {
-            let d = ''; res.on('data', c => d += c);
-            res.on('end', () => {
-                try {
-                    const raw = JSON.parse(d);
-                    // Accept any entry with an id ending in @c.us (individual chat)
-                    // regardless of isMyContact / type fields — Green API response varies
-                    const all = Array.isArray(raw) ? raw : [];
-                    const newSet = new Set();
-                    for (const c of all) {
-                        // Only saved contacts have a non-empty name
-                        if (!c.id || !c.id.endsWith('@c.us')) continue;
-                        if (!c.name || c.name.trim() === '') continue; // not saved in phonebook
-                        const num = c.id.replace('@c.us', '').replace(/\D/g, '');
-                        if (num) newSet.add(num);
-                    }
-                    savedContacts = newSet;
-                    console.log(`📱 אנשי קשר שמורים: ${savedContacts.size}`);
-                } catch (e) { console.error('❌ loadSavedContacts:', e.message); }
-                resolve();
-            });
-        }).on('error', (e) => { console.error('❌ loadSavedContacts req:', e.message); resolve(); });
-    });
-}
-loadSavedContacts();
-setInterval(loadSavedContacts, 30 * 60 * 1000); // רענון כל 30 דקות
 
 async function sendGreenMessage(chatId, text) {
     const url  = `${GREEN_URL}/waInstance${GREEN_INSTANCE}/sendMessage/${GREEN_TOKEN}`;
@@ -124,7 +91,7 @@ const server = http.createServer(async (req, res) => {
             status: healthy ? 'ok' : 'degraded',
             green_api: greenState,
             conversations: conversations.size,
-            contacts_filtered: savedContacts.size,
+
             blocked: BLOCKED.size,
             uptime_seconds: Math.floor(process.uptime()),
         };
@@ -232,7 +199,7 @@ const server = http.createServer(async (req, res) => {
   <div class="card"><div class="num">${avgMsgs}</div><div class="label">ממוצע הודעות לשיחה</div></div>
   <div class="card"><div class="num">${engRate}%</div><div class="label">אחוז מעורבות</div></div>
   <div class="card red"><div class="num">${BLOCKED.size}</div><div class="label">הוסרו מהרשימה</div></div>
-  <div class="card"><div class="num">${savedContacts.size}</div><div class="label">אנשי קשר שמורים (מסוננים)</div></div>
+
 </div>
 <p class="updated">עודכן: ${new Date().toLocaleString('he-IL')}</p>
 </body></html>`;
@@ -520,8 +487,6 @@ async function handleWebhook(data) {
     // Block list
     if (BLOCKED.has(phoneNum)) return;
 
-    // Saved contacts — bot only handles new leads (unsaved numbers)
-    if (savedContacts.has(phoneNum)) return;
 
     // Dedup
     if (processedIds.has(msgId)) return;
