@@ -118,6 +118,26 @@ const server = http.createServer(async (req, res) => {
         }); return;
     }
 
+    // Admin: reset a conversation (GET /admin/reset?phone=972...&key=drop2026secret)
+    if (req.method === 'GET' && urlObj.pathname === '/admin/reset') {
+        if (urlObj.searchParams.get('key') !== 'drop2026secret') { res.writeHead(403); res.end('forbidden'); return; }
+        const phone = urlObj.searchParams.get('phone');
+        if (phone) {
+            const chatId = phone + '@c.us';
+            conversations.delete(chatId);
+            saveConversations(conversations);
+            console.log(`🗑️ שיחה אופסה: ${phone}`);
+            res.writeHead(200); res.end(`reset: ${phone}`);
+        } else {
+            // Reset all
+            conversations.clear();
+            saveConversations(conversations);
+            console.log('🗑️ כל השיחות אופסו');
+            res.writeHead(200); res.end('all conversations reset');
+        }
+        return;
+    }
+
     res.writeHead(200, { 'Content-Type': 'text/html' });
     res.end('<html><body style="font-family:sans-serif;text-align:center;padding:50px"><h2>✅ DROP Bot is running (Green API)</h2></body></html>');
 });
