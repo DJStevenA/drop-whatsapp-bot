@@ -448,8 +448,8 @@ async function handleWebhook(data) {
 
     // First message — always send exact opening
     if (isNew) {
-        const opening = `היי! הגעת למיני סטיבן — סטיבן כנראה קבור באולפן עכשיו 😄
-אשמח לענות על שאלות ולעזור לך לקבוע זמן עם סטיבן.
+        const opening = `היי! הגעת למיני סטיבן — סטיבן הגדול כרגע מרים באיזה קלאב או עסוק באולפן 😄
+אשמח לענות לך על שאלות ולעזור לך לקבוע זמן עם סטיבן.
 מה שמך?`;
         history.push({ role: 'user', content: userText });
         history.push({ role: 'assistant', content: opening });
