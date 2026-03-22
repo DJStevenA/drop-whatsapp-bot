@@ -168,10 +168,28 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, () => console.log(`🌐 Webhook server on port ${PORT}`));
 
 // ── State ─────────────────────────────────────────────────────────────────────
-const conversations = new Map();
+const CONV_FILE = path.join(__dirname, 'conversations.json');
+
+function loadConversations() {
+    try {
+        const raw = JSON.parse(fs.readFileSync(CONV_FILE, 'utf8'));
+        return new Map(Object.entries(raw));
+    } catch { return new Map(); }
+}
+
+function saveConversations(map) {
+    try {
+        const obj = {};
+        for (const [k, v] of map.entries()) obj[k] = v;
+        fs.writeFileSync(CONV_FILE, JSON.stringify(obj), 'utf8');
+    } catch (e) { console.error('⚠️ saveConversations error:', e.message); }
+}
+
+const conversations = loadConversations();
 const leadCache     = new Map();   // phone → { genres: Set, gender: null }
 const processedIds  = new Set();   // prevent duplicate replies
 const MAX_HISTORY   = 20;
+console.log(`💾 טעינת היסטוריה: ${conversations.size} שיחות`);
 
 // ── Blocked numbers ───────────────────────────────────────────────────────────
 const BLOCKED_FILE = path.join(__dirname, 'blocked.json');
@@ -405,6 +423,7 @@ async function handleWebhook(data) {
 מה שמך?`;
         history.push({ role: 'user', content: userText });
         history.push({ role: 'assistant', content: opening });
+        saveConversations(conversations);
         await sendGreenMessage(chatId, opening);
         lastBotReply.set(chatId, Date.now());
         console.log('📤 פתיחה נשלחה');
@@ -419,6 +438,7 @@ async function handleWebhook(data) {
         const reply = await getAIResponse(history, 'new_lead');
         const trackedReply = addTrackingUrls(reply, phoneNum);
         history.push({ role: 'assistant', content: trackedReply });
+        saveConversations(conversations);
         await sendGreenMessage(chatId, trackedReply);
         lastBotReply.set(chatId, Date.now());
         console.log('📤 נשלח');
