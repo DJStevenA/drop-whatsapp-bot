@@ -168,7 +168,9 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, () => console.log(`🌐 Webhook server on port ${PORT}`));
 
 // ── State ─────────────────────────────────────────────────────────────────────
-const CONV_FILE = path.join(__dirname, 'conversations.json');
+const CONV_FILE = process.env.DATA_DIR
+    ? path.join(process.env.DATA_DIR, 'conversations.json')
+    : path.join(__dirname, 'conversations.json');
 
 function loadConversations() {
     try {
