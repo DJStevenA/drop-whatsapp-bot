@@ -8,8 +8,41 @@ const { upsertLead, updateLead, getPendingFollowups, extractEmail } = require('.
 
 // ── Green API config ──────────────────────────────────────────────────────────
 const GREEN_URL      = process.env.GREEN_API_URL || 'https://7107.api.greenapi.com';
-const GREEN_INSTANCE = process.env.GREEN_INSTANCE_ID || '7107544996';
-const GREEN_TOKEN    = process.env.GREEN_API_TOKEN || 'b213685ee00f4ea29922be6917fff18812ae2b6298e64754ab';
+const GREEN_INSTANCE = process.env.GREEN_INSTANCE_ID || '7107570993';
+const GREEN_TOKEN    = process.env.GREEN_API_TOKEN || '09288ed33d524aedbbdebb9ff47a977d4eb95ffd1c1d40dcbe';
+
+// ── Saved contacts (bot only responds to NON-contacts) ────────────────────────
+let savedContacts  = new Set();
+let contactsReady  = false; // SAFE DEFAULT: don't respond until contacts are loaded
+
+async function loadSavedContacts() {
+    const url = `${GREEN_URL}/waInstance${GREEN_INSTANCE}/getContacts/${GREEN_TOKEN}`;
+    const u   = new URL(url);
+    return new Promise((resolve) => {
+        const req = https.get({ hostname: u.hostname, path: u.pathname, timeout: 20000 }, (r) => {
+            let d = ''; r.on('data', c => d += c);
+            r.on('end', () => {
+                try {
+                    const list = JSON.parse(d);
+                    if (!Array.isArray(list)) { console.error('❌ getContacts: unexpected response'); resolve(); return; }
+                    savedContacts = new Set(
+                        list.filter(c => c.isMyContact === true)
+                            .map(c => (c.id || '').replace('@c.us','').replace(/\D/g,''))
+                            .filter(Boolean)
+                    );
+                    contactsReady = true;
+                    console.log(`📱 Contacts loaded: ${savedContacts.size}`);
+                } catch(e) { console.error('❌ getContacts parse error:', e.message); }
+                resolve();
+            });
+        });
+        req.on('error',   (e) => { console.error('❌ getContacts error:',   e.message); resolve(); });
+        req.on('timeout', ()  => { console.error('❌ getContacts timeout'); req.destroy(); resolve(); });
+    });
+}
+// Load at startup, refresh every 30 min
+loadSavedContacts();
+setInterval(loadSavedContacts, 30 * 60 * 1000);
 
 
 async function sendGreenMessage(chatId, text) {
@@ -355,6 +388,12 @@ function getNameFromHistory(chatId) {
 async function checkNudges() {
     const now = Date.now();
     for (const [chatId, lastAt] of lastBotReply.entries()) {
+        const phoneNum = chatId.replace('@c.us', '').replace(/\D/g, '');
+
+        // NEVER nudge blocked numbers or saved contacts
+        if (BLOCKED.has(phoneNum)) { lastBotReply.delete(chatId); nudgeStage.delete(chatId); continue; }
+        if (savedContacts.has(phoneNum)) { lastBotReply.delete(chatId); nudgeStage.delete(chatId); continue; }
+
         const state = nudgeStage.get(chatId) || { stage: 0, nudge1At: null };
 
         if (state.stage === 0 && now - lastAt >= NUDGE_DELAY_1) {
@@ -534,18 +573,15 @@ async function handleWebhook(data) {
     // Block list
     if (BLOCKED.has(phoneNum)) return;
 
-    // Skip saved contacts — lightweight per-message check
-    const isContact = await new Promise((resolve) => {
-        const u2 = new URL(`${GREEN_URL}/waInstance${GREEN_INSTANCE}/getContact/${GREEN_TOKEN}?chatId=${chatId}`);
-        https.get({ hostname: u2.hostname, path: u2.pathname + u2.search, timeout: 5000 }, (r) => {
-            let d = ''; r.on('data', c => d += c);
-            r.on('end', () => {
-                try { resolve(JSON.parse(d).isMyContact === true); }
-                catch { resolve(false); }
-            });
-        }).on('error', () => resolve(false)).on('timeout', () => resolve(false));
-    });
-    if (isContact) { console.log(`👤 דלג איש קשר שמור: ${phoneNum}`); return; }
+    // Skip saved contacts — safe default: if not loaded yet, skip ALL messages
+    if (!contactsReady) {
+        console.log(`⏳ Contacts not loaded yet — skipping ${phoneNum}`);
+        return;
+    }
+    if (savedContacts.has(phoneNum)) {
+        console.log(`👤 Saved contact — skipping: ${phoneNum}`);
+        return;
+    }
 
 
     // Dedup
