@@ -11,38 +11,33 @@ const GREEN_URL      = process.env.GREEN_API_URL || 'https://7107.api.greenapi.c
 const GREEN_INSTANCE = process.env.GREEN_INSTANCE_ID || '7107570993';
 const GREEN_TOKEN    = process.env.GREEN_API_TOKEN || '09288ed33d524aedbbdebb9ff47a977d4eb95ffd1c1d40dcbe';
 
-// ── Saved contacts (bot only responds to NON-contacts) ────────────────────────
-let savedContacts  = new Set();
-let contactsReady  = false; // SAFE DEFAULT: don't respond until contacts are loaded
-
-async function loadSavedContacts() {
-    const url = `${GREEN_URL}/waInstance${GREEN_INSTANCE}/getContacts/${GREEN_TOKEN}`;
-    const u   = new URL(url);
+// ── Contact check (bot only responds to NON-contacts) ─────────────────────────
+// Uses getContactInfo per-message: contactName is non-empty ↔ saved in phone
+async function isSavedContact(chatId) {
+    const url  = `${GREEN_URL}/waInstance${GREEN_INSTANCE}/getContactInfo/${GREEN_TOKEN}`;
+    const body = JSON.stringify({ chatId });
     return new Promise((resolve) => {
-        const req = https.get({ hostname: u.hostname, path: u.pathname, timeout: 20000 }, (r) => {
-            let d = ''; r.on('data', c => d += c);
-            r.on('end', () => {
+        const u = new URL(url);
+        const req = https.request({
+            hostname: u.hostname, path: u.pathname,
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+            timeout: 5000,
+        }, (res) => {
+            let d = ''; res.on('data', c => d += c);
+            res.on('end', () => {
                 try {
-                    const list = JSON.parse(d);
-                    if (!Array.isArray(list)) { console.error('❌ getContacts: unexpected response'); resolve(); return; }
-                    savedContacts = new Set(
-                        list.filter(c => c.isMyContact === true)
-                            .map(c => (c.id || '').replace('@c.us','').replace(/\D/g,''))
-                            .filter(Boolean)
-                    );
-                    contactsReady = true;
-                    console.log(`📱 Contacts loaded: ${savedContacts.size}`);
-                } catch(e) { console.error('❌ getContacts parse error:', e.message); }
-                resolve();
+                    const info = JSON.parse(d);
+                    // contactName is non-empty only when the number is saved in the phone's address book
+                    resolve(typeof info.contactName === 'string' && info.contactName.trim() !== '');
+                } catch { resolve(false); }
             });
         });
-        req.on('error',   (e) => { console.error('❌ getContacts error:',   e.message); resolve(); });
-        req.on('timeout', ()  => { console.error('❌ getContacts timeout'); req.destroy(); resolve(); });
+        req.on('error',   () => resolve(false));
+        req.on('timeout', () => { req.destroy(); resolve(false); });
+        req.write(body); req.end();
     });
 }
-// Load at startup, refresh every 30 min
-loadSavedContacts();
-setInterval(loadSavedContacts, 30 * 60 * 1000);
 
 
 async function sendGreenMessage(chatId, text) {
@@ -390,9 +385,9 @@ async function checkNudges() {
     for (const [chatId, lastAt] of lastBotReply.entries()) {
         const phoneNum = chatId.replace('@c.us', '').replace(/\D/g, '');
 
-        // NEVER nudge blocked numbers or saved contacts
+        // NEVER nudge blocked numbers
+        // (saved contact check not needed here — anyone in lastBotReply already passed the filter)
         if (BLOCKED.has(phoneNum)) { lastBotReply.delete(chatId); nudgeStage.delete(chatId); continue; }
-        if (savedContacts.has(phoneNum)) { lastBotReply.delete(chatId); nudgeStage.delete(chatId); continue; }
 
         const state = nudgeStage.get(chatId) || { stage: 0, nudge1At: null };
 
@@ -574,12 +569,9 @@ async function handleWebhook(data) {
     // Block list
     if (BLOCKED.has(phoneNum)) return;
 
-    // Skip saved contacts — safe default: if not loaded yet, skip ALL messages
-    if (!contactsReady) {
-        console.log(`⏳ Contacts not loaded yet — skipping ${phoneNum}`);
-        return;
-    }
-    if (savedContacts.has(phoneNum)) {
+    // Skip saved contacts — per-message check via getContactInfo
+    const saved = await isSavedContact(chatId);
+    if (saved) {
         console.log(`👤 Saved contact — skipping: ${phoneNum}`);
         return;
     }
