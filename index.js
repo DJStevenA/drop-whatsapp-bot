@@ -100,6 +100,46 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
+    // Self-test: simulates a real message end-to-end (Claude + Green API)
+    if (req.method === 'GET' && urlObj.pathname === '/selftest') {
+        if (urlObj.searchParams.get('key') !== 'drop2026secret') { res.writeHead(403); res.end('forbidden'); return; }
+        const results = { green_api: false, claude: false, webhook_parse: false };
+        try {
+            // 1. Green API check
+            const gState = await new Promise((resolve) => {
+                const u2 = new URL(`${GREEN_URL}/waInstance${GREEN_INSTANCE}/getStateInstance/${GREEN_TOKEN}`);
+                https.get({ hostname: u2.hostname, path: u2.pathname, timeout: 5000 }, (r) => {
+                    let d = ''; r.on('data', c => d += c);
+                    r.on('end', () => { try { resolve(JSON.parse(d).stateInstance); } catch { resolve('error'); } });
+                }).on('error', () => resolve('error'));
+            });
+            results.green_api = gState === 'authorized';
+
+            // 2. Claude API check — minimal call
+            const testReply = await anthropic.messages.create({
+                model: 'claude-haiku-4-5-20251001',
+                max_tokens: 10,
+                messages: [{ role: 'user', content: 'ping' }],
+            });
+            results.claude = testReply?.content?.length > 0;
+
+            // 3. Webhook parse simulation
+            const fakePayload = {
+                typeWebhook: 'incomingMessageReceived',
+                senderData: { chatId: 'test@c.us', senderName: 'Test' },
+                idMessage: 'selftest_' + Date.now(),
+                messageData: { textMessageData: { textMessage: 'test' } },
+            };
+            results.webhook_parse = !!(fakePayload.senderData?.chatId && fakePayload.messageData?.textMessageData?.textMessage);
+        } catch (err) {
+            results.error = err.message;
+        }
+        const allOk = results.green_api && results.claude && results.webhook_parse;
+        res.writeHead(allOk ? 200 : 503, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: allOk ? 'all_ok' : 'degraded', ...results }));
+        return;
+    }
+
     // Calendly webhook
     if (req.method === 'POST' && urlObj.pathname === '/calendly') {
         let body = '';
