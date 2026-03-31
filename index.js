@@ -116,7 +116,9 @@ const server = http.createServer(async (req, res) => {
             results.green_api = gState === 'authorized';
 
             // 2. Claude API check — minimal call
-            const testReply = await anthropic.messages.create({
+            const Anthropic = require('@anthropic-ai/sdk');
+            const _anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+            const testReply = await _anthropic.messages.create({
                 model: 'claude-haiku-4-5-20251001',
                 max_tokens: 10,
                 messages: [{ role: 'user', content: 'ping' }],
@@ -531,6 +533,19 @@ async function handleWebhook(data) {
 
     // Block list
     if (BLOCKED.has(phoneNum)) return;
+
+    // Skip saved contacts — lightweight per-message check
+    const isContact = await new Promise((resolve) => {
+        const u2 = new URL(`${GREEN_URL}/waInstance${GREEN_INSTANCE}/getContact/${GREEN_TOKEN}?chatId=${chatId}`);
+        https.get({ hostname: u2.hostname, path: u2.pathname + u2.search, timeout: 5000 }, (r) => {
+            let d = ''; r.on('data', c => d += c);
+            r.on('end', () => {
+                try { resolve(JSON.parse(d).isMyContact === true); }
+                catch { resolve(false); }
+            });
+        }).on('error', () => resolve(false)).on('timeout', () => resolve(false));
+    });
+    if (isContact) { console.log(`👤 דלג איש קשר שמור: ${phoneNum}`); return; }
 
 
     // Dedup
