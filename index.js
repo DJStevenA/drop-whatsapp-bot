@@ -548,9 +548,10 @@ async function scanForCRMData(phone, userText, history = []) {
 
 // ── Webhook handler ───────────────────────────────────────────────────────────
 async function handleWebhook(data) {
-    // Only handle incoming text messages
+    // Only handle incoming messages (text, extended text, images with caption)
     if (data.typeWebhook !== 'incomingMessageReceived') return;
-    if (!data.messageData || data.messageData.typeMessage !== 'textMessage') return;
+    const ALLOWED_TYPES = ['textMessage', 'extendedTextMessage', 'imageMessage'];
+    if (!data.messageData || !ALLOWED_TYPES.includes(data.messageData.typeMessage)) return;
 
     const chatId    = data.senderData?.chatId || data.senderData?.sender;
     const msgId     = data.idMessage;
