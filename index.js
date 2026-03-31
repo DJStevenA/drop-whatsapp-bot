@@ -33,8 +33,8 @@ async function isSavedContact(chatId) {
                 } catch { resolve(false); }
             });
         });
-        req.on('error',   () => resolve(false));
-        req.on('timeout', () => { req.destroy(); resolve(false); });
+        req.on('error',   () => resolve(true));   // on error → treat as saved (safe default)
+        req.on('timeout', () => { req.destroy(); resolve(true); }); // on timeout → treat as saved
         req.write(body); req.end();
     });
 }
