@@ -473,7 +473,12 @@ async function handleWebhook(data) {
 
     const chatId    = data.senderData?.chatId || data.senderData?.sender;
     const msgId     = data.idMessage;
-    const userText  = data.messageData?.textMessageData?.textMessage?.trim();
+    const userText  = (
+        data.messageData?.textMessageData?.textMessage ||
+        data.messageData?.extendedTextMessageData?.text ||
+        data.messageData?.imageMessage?.caption ||
+        ''
+    ).trim() || null;
     const senderName = data.senderData?.senderName || null;
 
     if (!chatId || !userText || !msgId) return;
