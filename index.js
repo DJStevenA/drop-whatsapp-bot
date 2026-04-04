@@ -30,7 +30,7 @@ async function isSavedContact(chatId) {
                     const info = JSON.parse(d);
                     // contactName is non-empty only when the number is saved in the phone's address book
                     resolve(typeof info.contactName === 'string' && info.contactName.trim() !== '');
-                } catch { resolve(false); }
+                } catch { resolve(true); }  // parse error → treat as saved (safe default)
             });
         });
         req.on('error',   () => resolve(true));   // on error → treat as saved (safe default)
@@ -347,17 +347,43 @@ const UNSUB_KEYWORDS = [
 ];
 function isUnsubRequest(text) {
     const t = text.trim().toLowerCase();
-    return UNSUB_KEYWORDS.some(k => t === k || t.startsWith(k + ' ') || t.includes(k));
+    // Exact match or starts with keyword — NOT includes, to avoid false positives
+    // e.g. "לא מעוניין בזום אבל כן בפרונטלי" should NOT trigger unsub
+    return UNSUB_KEYWORDS.some(k => t === k || t.startsWith(k + ' ') || t.startsWith(k + ',') || t.startsWith(k + '.'));
 }
 
+// ── Per-chat processing lock (prevents double replies) ────────────────────────
+const processingLock = new Set(); // chatIds currently being processed
+
 // ── Nudge (2 שלבים) ───────────────────────────────────────────────────────────
-const lastBotReply = new Map();
-const nudgeStage   = new Map(); // chatId → { stage: 0|1|2, nudge1At: timestamp|null }
+const NUDGE_FILE = path.join(__dirname, 'nudge_state.json');
+
+function loadNudgeState() {
+    try {
+        const raw = JSON.parse(fs.readFileSync(NUDGE_FILE, 'utf8'));
+        return {
+            lastBotReply: new Map(Object.entries(raw.lastBotReply || {})),
+            nudgeStage:   new Map(Object.entries(raw.nudgeStage   || {})),
+        };
+    } catch { return { lastBotReply: new Map(), nudgeStage: new Map() }; }
+}
+function saveNudgeState() {
+    try {
+        const obj = {
+            lastBotReply: Object.fromEntries(lastBotReply),
+            nudgeStage:   Object.fromEntries(nudgeStage),
+        };
+        fs.writeFileSync(NUDGE_FILE, JSON.stringify(obj), 'utf8');
+    } catch (e) { console.error('❌ saveNudgeState:', e.message); }
+}
+
+const { lastBotReply, nudgeStage } = loadNudgeState();
+console.log(`⏰ Nudge state loaded: ${lastBotReply.size} active timers`);
 
 const NUDGE_DELAY_1 = 10 * 60 * 1000;        // 10 דקות → nudge 1
 const NUDGE_DELAY_2 = 24 * 60 * 60 * 1000;   // 24 שעות אחרי nudge 1 → nudge 2
 
-const NUDGE_MSG_1 = `היי! 😊 נראה שנעצרת — אני עדיין כאן אם יש לך שאלות על השיעורים עם סטיבן 🎧`;
+const NUDGE_MSG_1 = `היי! 😊 נראה שנעצרת — אני עדיין כאן אם יש לך שאלות על השיעורים עם סטיבן`;
 
 function NUDGE_MSG_2(name) {
     return `היי${name ? ' ' + name : ''}! מיני סטיבן כאן 👋
@@ -387,7 +413,7 @@ async function checkNudges() {
 
         // NEVER nudge blocked numbers
         // (saved contact check not needed here — anyone in lastBotReply already passed the filter)
-        if (BLOCKED.has(phoneNum)) { lastBotReply.delete(chatId); nudgeStage.delete(chatId); continue; }
+        if (BLOCKED.has(phoneNum)) { lastBotReply.delete(chatId); nudgeStage.delete(chatId); saveNudgeState(); continue; }
 
         const state = nudgeStage.get(chatId) || { stage: 0, nudge1At: null };
 
@@ -395,6 +421,7 @@ async function checkNudges() {
             try {
                 await sendGreenMessage(chatId, NUDGE_MSG_1);
                 nudgeStage.set(chatId, { stage: 1, nudge1At: Date.now() });
+                saveNudgeState();
                 console.log(`💬 Nudge 1 → ${chatId}`);
             } catch (err) { console.error(`❌ Nudge 1 failed (${chatId}):`, err.message); }
 
@@ -404,6 +431,7 @@ async function checkNudges() {
                 await sendGreenMessage(chatId, NUDGE_MSG_2(name));
                 nudgeStage.set(chatId, { stage: 2, nudge1At: state.nudge1At });
                 lastBotReply.delete(chatId);
+                saveNudgeState();
                 console.log(`💬 Nudge 2 → ${chatId}`);
             } catch (err) { console.error(`❌ Nudge 2 failed (${chatId}):`, err.message); }
         }
@@ -428,6 +456,12 @@ async function sendPendingFollowups() {
     for (const lead of leads) {
         try {
             const chatId = lead.phone + '@c.us';
+            // Never follow-up saved contacts
+            const saved = await isSavedContact(chatId);
+            if (saved) {
+                console.log(`👤 פולו-אפ דולג — קונטקט שמור: ${lead.phone}`);
+                continue;
+            }
             await sendGreenMessage(chatId, FOLLOWUP_MSG(lead.name || lead.whatsapp_name));
             await updateLead(lead.phone, {
                 followup_count:   (lead.followup_count || 0) + 1,
@@ -569,10 +603,16 @@ async function handleWebhook(data) {
     // Block list
     if (BLOCKED.has(phoneNum)) return;
 
-    // Skip saved contacts — per-message check via getContactInfo
+    // Fast check: contactName in webhook payload — no API call needed
+    if (data.senderData?.contactName) {
+        console.log(`👤 Saved contact (webhook) — skipping: ${phoneNum}`);
+        return;
+    }
+
+    // Fallback: getContactInfo API call
     const saved = await isSavedContact(chatId);
     if (saved) {
-        console.log(`👤 Saved contact — skipping: ${phoneNum}`);
+        console.log(`👤 Saved contact (API) — skipping: ${phoneNum}`);
         return;
     }
 
@@ -581,6 +621,13 @@ async function handleWebhook(data) {
     if (processedIds.has(msgId)) return;
     processedIds.add(msgId);
     if (processedIds.size > 500) processedIds.delete(processedIds.values().next().value);
+
+    // Per-chat lock — prevents double reply if webhook fires twice simultaneously
+    if (processingLock.has(chatId)) {
+        console.log(`⏳ Already processing ${chatId} — skipping duplicate`);
+        return;
+    }
+    processingLock.add(chatId);
 
     console.log(`\n📩 ${chatId} | "${userText}"`);
 
@@ -593,12 +640,14 @@ async function handleWebhook(data) {
         updateLead(phoneNum, { status: 'contacted', notes: '🚫 ביקש הסרה מהרשימות' }).catch(()=>{});
         await sendGreenMessage(chatId, 'הוסרת מקבלת הודעות WhatsApp שלנו ✅\nלא תקבל/י הודעות נוספות.');
         console.log(`🚫 הוסר: ${phoneNum}`);
+        processingLock.delete(chatId);
         return;
     }
 
-    // Reset nudge
+    // Reset nudge (user replied — cancel pending timers)
     nudgeStage.delete(chatId);
     lastBotReply.delete(chatId);
+    saveNudgeState();
 
     // Init conversation
     const isNew = !conversations.has(chatId);
@@ -613,13 +662,19 @@ async function handleWebhook(data) {
     if (isNew) {
         const opening = `היי! הגעת למיני סטיבן — סטיבן הגדול כרגע מרים באיזה קלאב או עסוק באולפן 😄
 אשמח לענות לך על שאלות ולעזור לך לקבוע זמן עם סטיבן.
+
+אפשר גם לקבוע ישר שיחת טלפון עם סטיבן:
+https://calendly.com/dj-steven-angel/phone?back=1
+
 מה שמך?`;
         history.push({ role: 'user', content: userText });
         history.push({ role: 'assistant', content: opening });
         saveConversations(conversations);
         await sendGreenMessage(chatId, opening);
         lastBotReply.set(chatId, Date.now());
+        saveNudgeState();
         console.log('📤 פתיחה נשלחה');
+        processingLock.delete(chatId);
         return;
     }
 
@@ -633,6 +688,7 @@ async function handleWebhook(data) {
         saveConversations(conversations);
         await sendGreenMessage(chatId, reply);
         lastBotReply.set(chatId, Date.now());
+        saveNudgeState();
         console.log('📤 נשלח');
     } catch (err) {
         console.error('❌ שגיאת AI:', err.message);
@@ -646,8 +702,10 @@ async function handleWebhook(data) {
 
 נראה שיש אצלנו תקלה טכנית רגעית.
 
-סטיבן יחזור אליך בהקדם — תוך שעות ספורות לכל היותר 🎧`
+סטיבן יחזור אליך בהקדם — תוך שעות ספורות לכל היותר 🙏`
         );
+    } finally {
+        processingLock.delete(chatId);
     }
 }
 
