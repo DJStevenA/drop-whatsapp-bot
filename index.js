@@ -3,7 +3,7 @@ const http  = require('http');
 const https = require('https');
 const fs    = require('fs');
 const path  = require('path');
-const { getAIResponse } = require('./ai');
+const { getAIResponse, isOffTopic } = require('./ai');
 const { upsertLead, updateLead, getPendingFollowups, extractEmail } = require('./crm_client');
 
 // ── Green API config ──────────────────────────────────────────────────────────
@@ -362,23 +362,27 @@ function loadNudgeState() {
     try {
         const raw = JSON.parse(fs.readFileSync(NUDGE_FILE, 'utf8'));
         return {
-            lastBotReply: new Map(Object.entries(raw.lastBotReply || {})),
-            nudgeStage:   new Map(Object.entries(raw.nudgeStage   || {})),
+            lastBotReply:  new Map(Object.entries(raw.lastBotReply  || {})),
+            nudgeStage:    new Map(Object.entries(raw.nudgeStage    || {})),
+            offTopicCount: new Map(Object.entries(raw.offTopicCount || {})),
+            silenced:      new Set(raw.silenced || []),
         };
-    } catch { return { lastBotReply: new Map(), nudgeStage: new Map() }; }
+    } catch { return { lastBotReply: new Map(), nudgeStage: new Map(), offTopicCount: new Map(), silenced: new Set() }; }
 }
 function saveNudgeState() {
     try {
         const obj = {
-            lastBotReply: Object.fromEntries(lastBotReply),
-            nudgeStage:   Object.fromEntries(nudgeStage),
+            lastBotReply:  Object.fromEntries(lastBotReply),
+            nudgeStage:    Object.fromEntries(nudgeStage),
+            offTopicCount: Object.fromEntries(offTopicCount),
+            silenced:      [...silenced],
         };
         fs.writeFileSync(NUDGE_FILE, JSON.stringify(obj), 'utf8');
     } catch (e) { console.error('❌ saveNudgeState:', e.message); }
 }
 
-const { lastBotReply, nudgeStage } = loadNudgeState();
-console.log(`⏰ Nudge state loaded: ${lastBotReply.size} active timers`);
+const { lastBotReply, nudgeStage, offTopicCount, silenced } = loadNudgeState();
+console.log(`⏰ Nudge state loaded: ${lastBotReply.size} active timers, ${silenced.size} silenced`);
 
 const NUDGE_DELAY_1 = 10 * 60 * 1000;        // 10 דקות → nudge 1
 const NUDGE_DELAY_2 = 24 * 60 * 60 * 1000;   // 24 שעות אחרי nudge 1 → nudge 2
@@ -603,6 +607,9 @@ async function handleWebhook(data) {
     // Block list
     if (BLOCKED.has(phoneNum)) return;
 
+    // Silenced (off-topic conversation — bot stopped engaging)
+    if (silenced.has(chatId)) return;
+
     // Fast check: contactName in webhook payload — no API call needed
     if (data.senderData?.contactName) {
         console.log(`👤 Saved contact (webhook) — skipping: ${phoneNum}`);
@@ -678,6 +685,28 @@ https://calendly.com/dj-steven-angel/phone?back=1
         return;
     }
 
+    // Off-topic direct question: if we already asked "are you interested?" — check response
+    const DIRECT_Q_KEY = chatId + ':directQ';
+    if (offTopicCount.get(DIRECT_Q_KEY)) {
+        const positive = /כן|yes|מעוניין|מעוניינת|interested|sure|בטח|אוקי|ok|בהחלט/i.test(userText);
+        if (positive) {
+            // Reset — they are interested, continue normally
+            offTopicCount.delete(DIRECT_Q_KEY);
+            offTopicCount.delete(chatId);
+            saveNudgeState();
+            console.log(`✅ Off-topic reset — user confirmed interest: ${chatId}`);
+        } else {
+            // Not interested — silence
+            silenced.add(chatId);
+            offTopicCount.delete(DIRECT_Q_KEY);
+            offTopicCount.delete(chatId);
+            saveNudgeState();
+            console.log(`🔇 Silenced after no-interest reply: ${chatId}`);
+            processingLock.delete(chatId);
+            return;
+        }
+    }
+
     // AI
     history.push({ role: 'user', content: userText });
     while (history.length > MAX_HISTORY) history.splice(0, 2);
@@ -690,6 +719,30 @@ https://calendly.com/dj-steven-angel/phone?back=1
         lastBotReply.set(chatId, Date.now());
         saveNudgeState();
         console.log('📤 נשלח');
+
+        // Off-topic detection — runs in background, doesn't block the reply
+        isOffTopic(history).then(offTopic => {
+            if (!offTopic) {
+                // Relevant — reset counter
+                if (offTopicCount.get(chatId)) { offTopicCount.delete(chatId); saveNudgeState(); }
+                return;
+            }
+            const count = (offTopicCount.get(chatId) || 0) + 1;
+            offTopicCount.set(chatId, count);
+            console.log(`🤔 Off-topic count ${count} for ${chatId}`);
+
+            if (count >= 2) {
+                // Send direct question once
+                const directQ = `היי, רק לוודא — האם אתה מתעניין בשיעורי DJ עם סטיבן? (כן/לא)`;
+                sendGreenMessage(chatId, directQ).then(() => {
+                    offTopicCount.set(DIRECT_Q_KEY, true);
+                    saveNudgeState();
+                    console.log(`❓ Direct question sent to ${chatId}`);
+                }).catch(e => console.error('❌ Direct Q send failed:', e.message));
+            } else {
+                saveNudgeState();
+            }
+        }).catch(e => console.error('❌ isOffTopic error:', e.message));
     } catch (err) {
         console.error('❌ שגיאת AI:', err.message);
         await updateLead(phoneNum, {
