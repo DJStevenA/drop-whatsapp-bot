@@ -337,6 +337,119 @@ function saveBlocked(set) {
 }
 const BLOCKED = loadBlocked();
 
+// ── Language detection + bilingual messages ──────────────────────────────────
+// Detection: any Hebrew character → 'he', else any Latin letter → 'en', else 'he' (default)
+// Conversation language is sticky: derived from the FIRST user message in history
+function detectLanguage(text) {
+    if (!text || typeof text !== 'string') return 'he';
+    // Hebrew unicode block: U+0590 - U+05FF
+    if (/[\u0590-\u05FF]/.test(text)) return 'he';
+    // Latin letters → English. No letters at all (emoji-only, numbers) → default Hebrew.
+    if (/[a-zA-Z]/.test(text)) return 'en';
+    return 'he';
+}
+
+function getConversationLanguage(history) {
+    if (!Array.isArray(history)) return 'he';
+    const firstUser = history.find(m => m && m.role === 'user' && m.content);
+    return detectLanguage(firstUser?.content || '');
+}
+
+// Menu message — sent to ALL new contacts (no language detection needed)
+function getMenuMessage() {
+    return `היי! הגעתם למיני סטיבן.
+סטיבן הגדול כרגע עסוק באולפן או מרים בקלאב.
+
+ללימודי די.ג'י או הפקה לחצו 1
+לקביעת שיחה עם סטיבן — לחצו על הלינק:
+https://calendly.com/dj-steven-angel/phone?back=1
+For English press 3`;
+}
+
+// After pressing 1 — Hebrew lessons flow
+function getHebrewFlowOpening() {
+    return `מגניב! 😊
+
+אני מיני סטיבן — אשמח לענות על שאלות ולעזור לך לקבוע זמן עם סטיבן.
+
+מה שמך?`;
+}
+
+// After pressing 3 — English flow
+function getEnglishFlowOpening() {
+    return `Hey! Happy to help.
+
+I'm Mini Steven — Steven Angel's AI assistant. Steven is a signed producer (Moblack, MTGD, Sony) and Ableton Certified Trainer with 20+ years in electronic music.
+
+What are you looking for — lessons, ghost production, or something else?`;
+}
+
+function getUnsubMessage(language) {
+    return language === 'en'
+        ? `You've been removed from our WhatsApp messages ✅\nYou won't receive any more messages from us.`
+        : `הוסרת מקבלת הודעות WhatsApp שלנו ✅\nלא תקבל/י הודעות נוספות.`;
+}
+
+function getErrorFallbackMessage(language) {
+    return language === 'en'
+        ? `Hey! Got your message 🙏
+
+We're having a small technical hiccup right now. Steven will get back to you here within a few hours at most 🙏`
+        : `היי! קיבלנו את ההודעה שלך 🙏
+
+נראה שיש אצלנו תקלה טכנית רגעית.
+
+סטיבן יחזור אליך בהקדם — תוך שעות ספורות לכל היותר 🙏`;
+}
+
+function getDirectInterestQuestion(language) {
+    return language === 'en'
+        ? `Hey, just checking — are you interested in Steven's services? (yes/no)`
+        : `היי, רק לוודא — האם אתה מתעניין בשיעורי DJ עם סטיבן? (כן/לא)`;
+}
+
+function getNudgeMessage1(language) {
+    return language === 'en'
+        ? `Hey! 😊 Just checking in — I'm still here if you have any questions about Steven's services or want to book a quick call`
+        : `היי! 😊 נראה שנעצרת — אני עדיין כאן אם יש לך שאלות על השיעורים עם סטיבן`;
+}
+
+function getNudgeMessage2(name, language) {
+    if (language === 'en') {
+        return `Hey${name ? ' ' + name : ''}! Mini Steven here 👋
+
+Just wanted to follow up — are you still interested in working with Steven?
+
+If you'd like to book a quick 15-min Zoom call:
+https://calendly.com/dj-steven-angel/15-min-zoom?back=1`;
+    }
+    return `היי${name ? ' ' + name : ''}! מיני סטיבן כאן 👋
+
+ראיתי שהתחלנו לדבר לפני כמה זמן — רציתי לבדוק אם עדיין מתעניינ/ת בשיעורים עם סטיבן 😊
+
+אם תרצ/י לקבוע שיחת הכרות קצרה של 15 דקות:
+https://calendly.com/dj-steven-angel/15-min-zoom?back=1`;
+}
+
+function getFollowupMessage(name, language) {
+    if (language === 'en') {
+        return `Hey${name ? ' ' + name : ''}! Mini Steven here 👋
+
+Just checking in — are you still interested in working with Steven?
+
+If you have questions, I'm here 😊
+And if you'd like to book a quick call:
+https://calendly.com/dj-steven-angel/15-min-zoom?back=1`;
+    }
+    return `היי${name ? ' ' + name : ''}! מיני סטיבן כאן 👋
+
+רק בדקתי אם עדיין מתעניינ/ת בשיעורים עם סטיבן?
+
+אם יש שאלות — אני כאן 😊
+ואם תרצ/י לקבוע שיחה קצרה:
+https://calendly.com/dj-steven-angel/15-min-zoom?back=1`;
+}
+
 // ── Unsubscribe ───────────────────────────────────────────────────────────────
 const UNSUB_KEYWORDS = [
     'הסר', 'הסר אותי', 'הסר אותי מהרשימות',
@@ -366,8 +479,9 @@ function loadNudgeState() {
             nudgeStage:    new Map(Object.entries(raw.nudgeStage    || {})),
             offTopicCount: new Map(Object.entries(raw.offTopicCount || {})),
             silenced:      new Set(raw.silenced || []),
+            convMeta:      new Map(Object.entries(raw.convMeta      || {})),
         };
-    } catch { return { lastBotReply: new Map(), nudgeStage: new Map(), offTopicCount: new Map(), silenced: new Set() }; }
+    } catch { return { lastBotReply: new Map(), nudgeStage: new Map(), offTopicCount: new Map(), silenced: new Set(), convMeta: new Map() }; }
 }
 function saveNudgeState() {
     try {
@@ -376,27 +490,20 @@ function saveNudgeState() {
             nudgeStage:    Object.fromEntries(nudgeStage),
             offTopicCount: Object.fromEntries(offTopicCount),
             silenced:      [...silenced],
+            convMeta:      Object.fromEntries(convMeta),
         };
         fs.writeFileSync(NUDGE_FILE, JSON.stringify(obj), 'utf8');
     } catch (e) { console.error('❌ saveNudgeState:', e.message); }
 }
 
-const { lastBotReply, nudgeStage, offTopicCount, silenced } = loadNudgeState();
+const { lastBotReply, nudgeStage, offTopicCount, silenced, convMeta } = loadNudgeState();
 console.log(`⏰ Nudge state loaded: ${lastBotReply.size} active timers, ${silenced.size} silenced`);
 
 const NUDGE_DELAY_1 = 10 * 60 * 1000;        // 10 דקות → nudge 1
 const NUDGE_DELAY_2 = 24 * 60 * 60 * 1000;   // 24 שעות אחרי nudge 1 → nudge 2
 
-const NUDGE_MSG_1 = `היי! 😊 נראה שנעצרת — אני עדיין כאן אם יש לך שאלות על השיעורים עם סטיבן`;
-
-function NUDGE_MSG_2(name) {
-    return `היי${name ? ' ' + name : ''}! מיני סטיבן כאן 👋
-
-ראיתי שהתחלנו לדבר לפני כמה זמן — רציתי לבדוק אם עדיין מתעניינ/ת בשיעורים עם סטיבן 😊
-
-אם תרצ/י לקבוע שיחת הכרות קצרה של 15 דקות:
-https://calendly.com/dj-steven-angel/15-min-zoom?back=1`;
-}
+// (NUDGE_MSG_1 / NUDGE_MSG_2 moved to bilingual helpers above:
+//  getNudgeMessage1(language) / getNudgeMessage2(name, language))
 
 function getNameFromHistory(chatId) {
     const history = conversations.get(chatId) || [];
@@ -416,27 +523,48 @@ async function checkNudges() {
         const phoneNum = chatId.replace('@c.us', '').replace(/\D/g, '');
 
         // NEVER nudge blocked numbers
-        // (saved contact check not needed here — anyone in lastBotReply already passed the filter)
         if (BLOCKED.has(phoneNum)) { lastBotReply.delete(chatId); nudgeStage.delete(chatId); saveNudgeState(); continue; }
 
+        const meta = convMeta.get(chatId) || { status: 'active', language: null };
+
+        // ── MENU NUDGE: resend menu once after 10 min, then stop ─────────────
+        if (meta.status === 'menu') {
+            if (now - lastAt >= NUDGE_DELAY_1) {
+                try {
+                    await sendGreenMessage(chatId, getMenuMessage());
+                    meta.status = 'menu_nudged';
+                    convMeta.set(chatId, meta);
+                    lastBotReply.delete(chatId); // no more nudges after this
+                    saveNudgeState();
+                    console.log(`📋 תפריט — nudge יחיד → ${chatId}`);
+                } catch (err) { console.error(`❌ Menu nudge failed (${chatId}):`, err.message); }
+            }
+            continue;
+        }
+
+        // ── ACTIVE CONVERSATION NUDGE (2 stages: 10min + 24h) ────────────────
+        if (meta.status !== 'active' && meta.status !== null && meta.status !== undefined) continue;
+
         const state = nudgeStage.get(chatId) || { stage: 0, nudge1At: null };
+        const history  = conversations.get(chatId) || [];
+        const language = meta.language || getConversationLanguage(history);
 
         if (state.stage === 0 && now - lastAt >= NUDGE_DELAY_1) {
             try {
-                await sendGreenMessage(chatId, NUDGE_MSG_1);
+                await sendGreenMessage(chatId, getNudgeMessage1(language));
                 nudgeStage.set(chatId, { stage: 1, nudge1At: Date.now() });
                 saveNudgeState();
-                console.log(`💬 Nudge 1 → ${chatId}`);
+                console.log(`💬 Nudge 1 (${language}) → ${chatId}`);
             } catch (err) { console.error(`❌ Nudge 1 failed (${chatId}):`, err.message); }
 
         } else if (state.stage === 1 && state.nudge1At && now - state.nudge1At >= NUDGE_DELAY_2) {
             const name = getNameFromHistory(chatId);
             try {
-                await sendGreenMessage(chatId, NUDGE_MSG_2(name));
+                await sendGreenMessage(chatId, getNudgeMessage2(name, language));
                 nudgeStage.set(chatId, { stage: 2, nudge1At: state.nudge1At });
                 lastBotReply.delete(chatId);
                 saveNudgeState();
-                console.log(`💬 Nudge 2 → ${chatId}`);
+                console.log(`💬 Nudge 2 (${language}) → ${chatId}`);
             } catch (err) { console.error(`❌ Nudge 2 failed (${chatId}):`, err.message); }
         }
     }
@@ -444,14 +572,7 @@ async function checkNudges() {
 setInterval(checkNudges, 60 * 1000);
 
 // ── Follow-up ─────────────────────────────────────────────────────────────────
-const FOLLOWUP_MSG = (name) =>
-`היי${name ? ' ' + name : ''}! מיני סטיבן כאן 👋
-
-רק בדקתי אם עדיין מתעניינ/ת בשיעורים עם סטיבן?
-
-אם יש שאלות — אני כאן 😊
-ואם תרצ/י לקבוע שיחה קצרה:
-https://calendly.com/dj-steven-angel/15-min-zoom?back=1`;
+// (FOLLOWUP_MSG moved to bilingual helper above: getFollowupMessage(name, language))
 
 async function sendPendingFollowups() {
     const leads = await getPendingFollowups();
@@ -466,7 +587,10 @@ async function sendPendingFollowups() {
                 console.log(`👤 פולו-אפ דולג — קונטקט שמור: ${lead.phone}`);
                 continue;
             }
-            await sendGreenMessage(chatId, FOLLOWUP_MSG(lead.name || lead.whatsapp_name));
+            // Per-conversation language for the followup text
+            const history  = conversations.get(chatId) || [];
+            const language = getConversationLanguage(history);
+            await sendGreenMessage(chatId, getFollowupMessage(lead.name || lead.whatsapp_name, language));
             await updateLead(lead.phone, {
                 followup_count:   (lead.followup_count || 0) + 1,
                 last_followup_at: new Date().toISOString(),
@@ -645,8 +769,71 @@ async function handleWebhook(data) {
         nudgeStage.delete(chatId);
         lastBotReply.delete(chatId);
         updateLead(phoneNum, { status: 'contacted', notes: '🚫 ביקש הסרה מהרשימות' }).catch(()=>{});
-        await sendGreenMessage(chatId, 'הוסרת מקבלת הודעות WhatsApp שלנו ✅\nלא תקבל/י הודעות נוספות.');
-        console.log(`🚫 הוסר: ${phoneNum}`);
+        // Detect language from the unsub text itself (no history yet at this point for new leads)
+        const unsubLang = detectLanguage(userText);
+        await sendGreenMessage(chatId, getUnsubMessage(unsubLang));
+        console.log(`🚫 הוסר (${unsubLang}): ${phoneNum}`);
+        processingLock.delete(chatId);
+        return;
+    }
+
+    // Init conversation
+    const isNew = !conversations.has(chatId);
+    if (!conversations.has(chatId)) conversations.set(chatId, []);
+    const history = conversations.get(chatId);
+
+    // CRM
+    upsertLead({ phone: phoneNum, whatsapp_name: senderName, source: 'whatsapp' }).catch(()=>{});
+
+    // ── NEW CONTACT: send menu, wait for 1/3 ─────────────────────────────────
+    if (isNew) {
+        const menu = getMenuMessage();
+        history.push({ role: 'user', content: userText });
+        history.push({ role: 'assistant', content: menu });
+        convMeta.set(chatId, { status: 'menu', language: null });
+        saveConversations(conversations);
+        await sendGreenMessage(chatId, menu);
+        lastBotReply.set(chatId, Date.now());
+        saveNudgeState();
+        console.log(`📤 תפריט נשלח → ${phoneNum}`);
+        processingLock.delete(chatId);
+        return;
+    }
+
+    // ── MENU STATE: route by 1/3 ─────────────────────────────────────────────
+    const meta = convMeta.get(chatId) || { status: 'active', language: null };
+    if (meta.status === 'menu' || meta.status === 'menu_nudged') {
+        const choice = userText.trim();
+        if (choice === '1') {
+            meta.status = 'active';
+            meta.language = 'he';
+            convMeta.set(chatId, meta);
+            history.push({ role: 'user', content: userText });
+            const opening = getHebrewFlowOpening();
+            history.push({ role: 'assistant', content: opening });
+            saveConversations(conversations);
+            await sendGreenMessage(chatId, opening);
+            lastBotReply.set(chatId, Date.now());
+            nudgeStage.delete(chatId);
+            saveNudgeState();
+            console.log(`📤 עברית → ${phoneNum}`);
+        } else if (choice === '3') {
+            meta.status = 'active';
+            meta.language = 'en';
+            convMeta.set(chatId, meta);
+            history.push({ role: 'user', content: userText });
+            const opening = getEnglishFlowOpening();
+            history.push({ role: 'assistant', content: opening });
+            saveConversations(conversations);
+            await sendGreenMessage(chatId, opening);
+            lastBotReply.set(chatId, Date.now());
+            nudgeStage.delete(chatId);
+            saveNudgeState();
+            console.log(`📤 English → ${phoneNum}`);
+        } else {
+            // Not a valid choice — ignore, let nudge handle it
+            console.log(`⏳ תפריט: לא זוהה ("${userText}") → ${phoneNum}`);
+        }
         processingLock.delete(chatId);
         return;
     }
@@ -656,34 +843,7 @@ async function handleWebhook(data) {
     lastBotReply.delete(chatId);
     saveNudgeState();
 
-    // Init conversation
-    const isNew = !conversations.has(chatId);
-    if (!conversations.has(chatId)) conversations.set(chatId, []);
-    const history = conversations.get(chatId);
-
-    // CRM
-    upsertLead({ phone: phoneNum, whatsapp_name: senderName, source: 'whatsapp' }).catch(()=>{});
     scanForCRMData(phoneNum, userText, history).catch(()=>{});
-
-    // First message — always send exact opening
-    if (isNew) {
-        const opening = `היי! הגעת למיני סטיבן — סטיבן הגדול כרגע מרים באיזה קלאב או עסוק באולפן 😄
-אשמח לענות לך על שאלות ולעזור לך לקבוע זמן עם סטיבן.
-
-אפשר גם לקבוע ישר שיחת טלפון עם סטיבן:
-https://calendly.com/dj-steven-angel/phone?back=1
-
-מה שמך?`;
-        history.push({ role: 'user', content: userText });
-        history.push({ role: 'assistant', content: opening });
-        saveConversations(conversations);
-        await sendGreenMessage(chatId, opening);
-        lastBotReply.set(chatId, Date.now());
-        saveNudgeState();
-        console.log('📤 פתיחה נשלחה');
-        processingLock.delete(chatId);
-        return;
-    }
 
     // Off-topic direct question: if we already asked "are you interested?" — check response
     const DIRECT_Q_KEY = chatId + ':directQ';
@@ -711,14 +871,17 @@ https://calendly.com/dj-steven-angel/phone?back=1
     history.push({ role: 'user', content: userText });
     while (history.length > MAX_HISTORY) history.splice(0, 2);
 
+    // Language: use convMeta (set when user pressed 1/3), fallback to detection for old conversations
+    const language = convMeta.get(chatId)?.language || getConversationLanguage(history);
+
     try {
-        const reply = await getAIResponse(history, 'new_lead');
+        const reply = await getAIResponse(history, 'new_lead', language);
         history.push({ role: 'assistant', content: reply });
         saveConversations(conversations);
         await sendGreenMessage(chatId, reply);
         lastBotReply.set(chatId, Date.now());
         saveNudgeState();
-        console.log('📤 נשלח');
+        console.log(`📤 נשלח (${language})`);
 
         // Off-topic detection — runs in background, doesn't block the reply
         isOffTopic(history).then(offTopic => {
@@ -732,12 +895,11 @@ https://calendly.com/dj-steven-angel/phone?back=1
             console.log(`🤔 Off-topic count ${count} for ${chatId}`);
 
             if (count >= 2) {
-                // Send direct question once
-                const directQ = `היי, רק לוודא — האם אתה מתעניין בשיעורי DJ עם סטיבן? (כן/לא)`;
-                sendGreenMessage(chatId, directQ).then(() => {
+                // Send direct question once (bilingual)
+                sendGreenMessage(chatId, getDirectInterestQuestion(language)).then(() => {
                     offTopicCount.set(DIRECT_Q_KEY, true);
                     saveNudgeState();
-                    console.log(`❓ Direct question sent to ${chatId}`);
+                    console.log(`❓ Direct question sent to ${chatId} (${language})`);
                 }).catch(e => console.error('❌ Direct Q send failed:', e.message));
             } else {
                 saveNudgeState();
@@ -750,13 +912,7 @@ https://calendly.com/dj-steven-angel/phone?back=1
             notes: `⚠️ שגיאה טכנית ${new Date().toLocaleString('he-IL')} — לחזור ללקוח`,
         }).catch(()=>{});
         history.pop();
-        await sendGreenMessage(chatId,
-`היי! קיבלנו את ההודעה שלך 🙏
-
-נראה שיש אצלנו תקלה טכנית רגעית.
-
-סטיבן יחזור אליך בהקדם — תוך שעות ספורות לכל היותר 🙏`
-        );
+        await sendGreenMessage(chatId, getErrorFallbackMessage(language));
     } finally {
         processingLock.delete(chatId);
     }
