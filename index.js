@@ -41,6 +41,18 @@ async function isSavedContact(chatId) {
 
 
 async function sendGreenMessage(chatId, text) {
+    // ── HARD GUARD: never message a blocked (unsubscribed) number, no matter who's asking.
+    // This is the single chokepoint for ALL outbound WhatsApp messages — nudges, follow-ups,
+    // broadcasts, AI replies, error fallbacks. Once a phone is in BLOCKED, this function
+    // refuses + emits a loud warning to logs (visible in Railway dashboard). The unsubscribe
+    // confirmation in handleWebhook is sent BEFORE BLOCKED.add(), so it's not affected.
+    const phoneNum = (chatId || '').replace('@c.us', '').replace(/\D/g, '');
+    if (phoneNum && BLOCKED.has(phoneNum)) {
+        const caller = (new Error().stack || '').split('\n').slice(2, 5).join(' | ');
+        console.error(`🚨 BLOCKED-SEND REFUSED → ${phoneNum} | text="${(text || '').slice(0, 60)}..." | caller: ${caller}`);
+        return null;
+    }
+
     const url  = `${GREEN_URL}/waInstance${GREEN_INSTANCE}/sendMessage/${GREEN_TOKEN}`;
     const body = JSON.stringify({ chatId, message: text });
     return new Promise((resolve, reject) => {
@@ -475,12 +487,22 @@ ${CALENDLY_15MIN_ZOOM}`;
 }
 
 // ── Unsubscribe ───────────────────────────────────────────────────────────────
+// Once any of these matches (exact or as a sentence-starter), the phone is added to BLOCKED
+// permanently and the HARD GUARD in sendGreenMessage refuses ALL future outbound messages —
+// nudges, follow-ups, broadcasts, AI replies. There is no override. See sendGreenMessage.
 const UNSUB_KEYWORDS = [
-    'הסר', 'הסר אותי', 'הסר אותי מהרשימות',
-    'לא לשלוח', 'לא לשלוח הודעות', 'אל תשלח', 'אל תשלחי',
-    'תפסיק', 'תפסיקי', 'תפסיק לשלוח', 'תפסיקי לשלוח',
-    'לא מעוניין', 'לא מעוניינת', 'לא רלוונטי',
-    'stop', 'unsubscribe',
+    // Hebrew — explicit removal
+    'הסר', 'הסר אותי', 'הסרי', 'הסירו', 'הסר אותי מהרשימות', 'הסר מהרשימה',
+    'תוריד', 'תוריד אותי', 'תוריד אותי מהרשימה', 'תורידי אותי',
+    // Hebrew — stop sending
+    'לא לשלוח', 'לא לשלוח הודעות', 'אל תשלח', 'אל תשלחי', 'אל תשלחו',
+    'תפסיק', 'תפסיקי', 'תפסיק לשלוח', 'תפסיקי לשלוח', 'תפסיקו',
+    // Hebrew — not interested
+    'לא מעוניין', 'לא מעוניינת', 'לא רלוונטי', 'לא צריך',
+    // Hebrew — strong stop signals
+    'די', 'מספיק', 'מספיק תודה',
+    // English
+    'stop', 'unsubscribe', 'remove', 'remove me', 'opt out', 'opt-out', 'leave me alone',
 ];
 function isUnsubRequest(text) {
     const t = text.trim().toLowerCase();
@@ -610,6 +632,13 @@ async function sendPendingFollowups() {
     for (const lead of leads) {
         try {
             const chatId = lead.phone + '@c.us';
+            const phoneNum = (lead.phone || '').replace(/\D/g, '');
+            // HARD RULE: never follow-up unsubscribed leads. Defense-in-depth — sendGreenMessage's
+            // guard would also catch this, but skipping early avoids an unnecessary getContactInfo call.
+            if (BLOCKED.has(phoneNum)) {
+                console.log(`🚫 פולו-אפ דולג — מספר חסום (הסיר עצמו): ${lead.phone}`);
+                continue;
+            }
             // Never follow-up saved contacts
             const saved = await isSavedContact(chatId);
             if (saved) {
@@ -802,16 +831,19 @@ async function handleWebhook(data) {
 
     console.log(`\n📩 ${chatId} | "${userText}"`);
 
-    // Unsubscribe
+    // Unsubscribe — order matters: send the confirmation BEFORE adding to BLOCKED, otherwise
+    // the HARD GUARD in sendGreenMessage will refuse the confirmation itself. After BLOCKED.add(),
+    // nothing in the system can ever send to this number again (nudges, follow-ups, etc.).
     if (isUnsubRequest(userText)) {
+        const unsubLang = detectLanguage(userText);
+        await sendGreenMessage(chatId, getUnsubMessage(unsubLang));
         BLOCKED.add(phoneNum);
         saveBlocked(BLOCKED);
         nudgeStage.delete(chatId);
         lastBotReply.delete(chatId);
+        convMeta.delete(chatId);                  // wipe state so a future webhook can't reach AI/menu paths
+        saveNudgeState();
         updateLead(phoneNum, { status: 'contacted', notes: '🚫 ביקש הסרה מהרשימות' }).catch(()=>{});
-        // Detect language from the unsub text itself (no history yet at this point for new leads)
-        const unsubLang = detectLanguage(userText);
-        await sendGreenMessage(chatId, getUnsubMessage(unsubLang));
         console.log(`🚫 הוסר (${unsubLang}): ${phoneNum}`);
         processingLock.delete(chatId);
         return;
