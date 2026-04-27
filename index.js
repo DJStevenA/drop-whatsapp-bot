@@ -296,9 +296,17 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, () => console.log(`🌐 Webhook server on port ${PORT}`));
 
 // ── State ─────────────────────────────────────────────────────────────────────
-const CONV_FILE = process.env.DATA_DIR
-    ? path.join(process.env.DATA_DIR, 'conversations.json')
-    : path.join(__dirname, 'conversations.json');
+// All runtime state files live in DATA_DIR if set (Railway Volume), otherwise __dirname.
+// Setting DATA_DIR=/data on Railway with a mounted Volume makes blocked.json,
+// conversations.json, and nudge_state.json survive deploys — critical for the
+// "unsubscribe is unbreakable" rule, since blocked.json on the ephemeral container
+// otherwise resets on every push.
+function dataPath(name) {
+    return process.env.DATA_DIR
+        ? path.join(process.env.DATA_DIR, name)
+        : path.join(__dirname, name);
+}
+const CONV_FILE = dataPath('conversations.json');
 
 function cleanOldTrackingUrls(text) {
     if (!text) return text;
@@ -339,10 +347,33 @@ const MAX_HISTORY   = 20;
 console.log(`💾 טעינת היסטוריה: ${conversations.size} שיחות`);
 
 // ── Blocked numbers ───────────────────────────────────────────────────────────
-const BLOCKED_FILE = path.join(__dirname, 'blocked.json');
+// Two-source merge: the committed blocked.json in __dirname is the SEED list (manually
+// blocked numbers like the 3 known offenders) and ALWAYS loaded. The runtime file in
+// DATA_DIR holds self-unsubscribed phones added at runtime. Once Railway Volume is
+// mounted with DATA_DIR=/data, runtime additions survive deploys. Without DATA_DIR,
+// both paths are the same file (__dirname/blocked.json) — so no double-load.
+const BLOCKED_FILE      = dataPath('blocked.json');                 // runtime additions
+const BLOCKED_SEED_FILE = path.join(__dirname, 'blocked.json');     // committed seed list
+
 function loadBlocked() {
-    try { return new Set(JSON.parse(fs.readFileSync(BLOCKED_FILE, 'utf8'))); }
-    catch { return new Set((process.env.BLOCKED_NUMBERS || '').split(',').filter(Boolean)); }
+    const set = new Set();
+    // 1. Always seed from the committed file (manually-blocked numbers from git history)
+    try {
+        const seed = JSON.parse(fs.readFileSync(BLOCKED_SEED_FILE, 'utf8'));
+        if (Array.isArray(seed)) for (const p of seed) set.add(p);
+    } catch {}
+    // 2. Merge runtime additions from DATA_DIR (skip if it's the same file)
+    if (BLOCKED_FILE !== BLOCKED_SEED_FILE) {
+        try {
+            const runtime = JSON.parse(fs.readFileSync(BLOCKED_FILE, 'utf8'));
+            if (Array.isArray(runtime)) for (const p of runtime) set.add(p);
+        } catch {}
+    }
+    // 3. Last-resort fallback: env var (only if both files missing)
+    if (set.size === 0) {
+        for (const p of (process.env.BLOCKED_NUMBERS || '').split(',').filter(Boolean)) set.add(p);
+    }
+    return set;
 }
 function saveBlocked(set) {
     fs.writeFileSync(BLOCKED_FILE, JSON.stringify([...set]), 'utf8');
@@ -515,7 +546,7 @@ function isUnsubRequest(text) {
 const processingLock = new Set(); // chatIds currently being processed
 
 // ── Nudge (2 שלבים) ───────────────────────────────────────────────────────────
-const NUDGE_FILE = path.join(__dirname, 'nudge_state.json');
+const NUDGE_FILE = dataPath('nudge_state.json');
 
 function loadNudgeState() {
     try {
