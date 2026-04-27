@@ -292,9 +292,9 @@ function cleanOldTrackingUrls(text) {
     if (!text) return text;
     const BASE = 'https://drop-whatsapp-bot-production.up.railway.app';
     return text
-        .replace(new RegExp(BASE.replace(/\./g,'\\.') + '/r\\?u=[^&]+&t=cal-phone[^\\s]*', 'g'), 'https://calendly.com/dj-steven-angel/phone?back=1')
-        .replace(new RegExp(BASE.replace(/\./g,'\\.') + '/r\\?u=[^&]+&t=cal-60min[^\\s]*', 'g'), 'https://calendly.com/dj-steven-angel/60min?back=1')
-        .replace(new RegExp(BASE.replace(/\./g,'\\.') + '/r\\?u=[^&]+&t=cal-zoom[^\\s]*', 'g'), 'https://calendly.com/dj-steven-angel/15-min-zoom?back=1')
+        .replace(new RegExp(BASE.replace(/\./g,'\\.') + '/r\\?u=[^&]+&t=cal-phone[^\\s]*', 'g'), 'https://bit.ly/48SkPqo')
+        .replace(new RegExp(BASE.replace(/\./g,'\\.') + '/r\\?u=[^&]+&t=cal-60min[^\\s]*', 'g'), 'https://bit.ly/48ZLYYv')
+        .replace(new RegExp(BASE.replace(/\./g,'\\.') + '/r\\?u=[^&]+&t=cal-zoom[^\\s]*', 'g'), 'https://bit.ly/3ORMJvM')
         .replace(new RegExp(BASE.replace(/\./g,'\\.') + '/r\\?u=[^&]+&t=yt-canary[^\\s]*', 'g'), 'https://www.youtube.com/watch?v=sPArmZafsX8')
         .replace(new RegExp(BASE.replace(/\./g,'\\.') + '/r\\?u=[^&]+&t=yt-hugel[^\\s]*', 'g'), 'https://www.youtube.com/watch?v=tPYhltoFTZo')
         .replace(new RegExp(BASE.replace(/\./g,'\\.') + '/r\\?u=[^&]+&t=yt-swissa[^\\s]*', 'g'), 'https://youtu.be/64uzvnHU194');
@@ -355,10 +355,18 @@ function getConversationLanguage(history) {
     return detectLanguage(firstUser?.content || '');
 }
 
-// Bitly short link for the Calendly phone call (with whatsapp/bot UTMs)
+// Bitly short links for Calendly (with whatsapp/bot UTMs baked into destination)
 // Created 2026-04-27 per Marketing Agent brief (briefs/2026-04-27/bitly_link_shortener_capability.md)
 // Long URL: https://calendly.com/dj-steven-angel/phone?back=1&utm_source=whatsapp&utm_medium=bot&utm_campaign=calendly-phone
-const CALENDLY_SHORT = 'https://bit.ly/48SkPqo';
+const CALENDLY_SHORT       = 'https://bit.ly/48SkPqo';   // phone call
+// Long URL: https://calendly.com/dj-steven-angel/60min?back=1&utm_source=whatsapp&utm_medium=bot&utm_campaign=calendly-60min
+const CALENDLY_60MIN       = 'https://bit.ly/48ZLYYv';   // 60min lesson
+// Long URL: https://calendly.com/dj-steven-angel/15-min-zoom?back=1&utm_source=whatsapp&utm_medium=bot&utm_campaign=calendly-15min-zoom
+const CALENDLY_15MIN_ZOOM  = 'https://bit.ly/3ORMJvM';   // 15-min zoom intro
+// Long URL: https://calendly.com/dj-steven-angel/1hr-production-lesson-mentoring-prepaid-clone?utm_source=whatsapp&utm_medium=bot&utm_campaign=calendly-1hr-lesson
+const CALENDLY_1HR_LESSON  = 'https://bit.ly/4tuLvpq';   // 1hr production lesson ($30)
+// Long URL: https://calendly.com/dj-steven-angel/3hr-production-lesson-mentoring-prepaid-clone?utm_source=whatsapp&utm_medium=bot&utm_campaign=calendly-3hr-lesson
+const CALENDLY_3HR_LESSON  = 'https://bit.ly/3ON2eVN';   // 3hr production lesson ($120)
 
 // Menu message — sent to ALL new contacts (no language detection needed)
 function getMenuMessage() {
@@ -437,14 +445,14 @@ function getNudgeMessage2(name, language) {
 Just wanted to follow up — are you still interested in working with Steven?
 
 If you'd like to book a quick 15-min Zoom call:
-https://calendly.com/dj-steven-angel/15-min-zoom?back=1`;
+${CALENDLY_15MIN_ZOOM}`;
     }
     return `היי${name ? ' ' + name : ''}! מיני סטיבן כאן 👋
 
 ראיתי שהתחלנו לדבר לפני כמה זמן — רציתי לבדוק אם עדיין מתעניינ/ת בשיעורים עם סטיבן 😊
 
 אם תרצ/י לקבוע שיחת הכרות קצרה של 15 דקות:
-https://calendly.com/dj-steven-angel/15-min-zoom?back=1`;
+${CALENDLY_15MIN_ZOOM}`;
 }
 
 function getFollowupMessage(name, language) {
@@ -455,7 +463,7 @@ Just checking in — are you still interested in working with Steven?
 
 If you have questions, I'm here 😊
 And if you'd like to book a quick call:
-https://calendly.com/dj-steven-angel/15-min-zoom?back=1`;
+${CALENDLY_15MIN_ZOOM}`;
     }
     return `היי${name ? ' ' + name : ''}! מיני סטיבן כאן 👋
 
@@ -463,7 +471,7 @@ https://calendly.com/dj-steven-angel/15-min-zoom?back=1`;
 
 אם יש שאלות — אני כאן 😊
 ואם תרצ/י לקבוע שיחה קצרה:
-https://calendly.com/dj-steven-angel/15-min-zoom?back=1`;
+${CALENDLY_15MIN_ZOOM}`;
 }
 
 // ── Unsubscribe ───────────────────────────────────────────────────────────────
