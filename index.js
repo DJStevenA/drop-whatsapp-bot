@@ -541,6 +541,10 @@ async function checkNudges() {
         // NEVER nudge blocked numbers
         if (BLOCKED.has(phoneNum)) { lastBotReply.delete(chatId); nudgeStage.delete(chatId); saveNudgeState(); continue; }
 
+        // Skip if a webhook is currently processing this chat — avoids racing with handleWebhook
+        // (e.g. user just replied "1" and we'd send a duplicate nudge on top of the opening)
+        if (processingLock.has(chatId)) continue;
+
         const meta = convMeta.get(chatId) || { status: 'active', language: null };
 
         // ── MENU NUDGE: send a SHORT reminder once after 10 min, then stop ───
@@ -602,6 +606,17 @@ async function sendPendingFollowups() {
             const saved = await isSavedContact(chatId);
             if (saved) {
                 console.log(`👤 פולו-אפ דולג — קונטקט שמור: ${lead.phone}`);
+                continue;
+            }
+            // Skip leads still in initial menu state — avoids sending follow-up on top of the menu
+            const lstatus = convMeta.get(chatId)?.status;
+            if (lstatus === 'menu' || lstatus === 'menu_nudged') {
+                console.log(`📋 פולו-אפ דולג — עדיין בתפריט (${lstatus}): ${lead.phone}`);
+                continue;
+            }
+            // Skip if a webhook is currently processing this chat
+            if (processingLock.has(chatId)) {
+                console.log(`⏳ פולו-אפ דולג — webhook בתהליך: ${lead.phone}`);
                 continue;
             }
             // Per-conversation language for the followup text
@@ -835,14 +850,19 @@ async function handleWebhook(data) {
             saveNudgeState();
             console.log(`📤 עברית → ${phoneNum}`);
         } else if (choice === '2') {
-            // User typed 2 → wants to schedule a call. Resend the bitly link prominently.
-            // Keep status as menu/menu_nudged so they can still pick 1 or 3 later if needed.
+            // User typed 2 → wants to schedule a call. Resend the bitly link prominently
+            // and transition to active/he so any follow-up reply is handled by AI (not silenced).
+            // Cancel pending menu nudge so the user doesn't get a "reminder" after already engaging.
+            meta.status = 'active';
+            meta.language = 'he';
+            convMeta.set(chatId, meta);
             const reply = `מעולה 🙌 לחצו לקביעת זמן שיחה עם סטיבן:\n👉 ${CALENDLY_SHORT}`;
             history.push({ role: 'user', content: userText });
             history.push({ role: 'assistant', content: reply });
             saveConversations(conversations);
             await sendGreenMessage(chatId, reply);
-            lastBotReply.set(chatId, Date.now());
+            lastBotReply.delete(chatId); // cancel pending menu nudge
+            nudgeStage.delete(chatId);
             saveNudgeState();
             console.log(`📤 קלנדרי (bitly) → ${phoneNum}`);
         } else if (choice === '3') {
