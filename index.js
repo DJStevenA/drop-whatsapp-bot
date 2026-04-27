@@ -357,13 +357,24 @@ function getConversationLanguage(history) {
 
 // Menu message — sent to ALL new contacts (no language detection needed)
 function getMenuMessage() {
-    return `היי! הגעתם למיני סטיבן.
-סטיבן הגדול כרגע עסוק באולפן או מרים בקלאב.
+    return `היי 😊 הגעתם למיני סטיבן 🎧
 
-ללימודי די.ג'י או הפקה לחצו 1
-לקביעת שיחה עם סטיבן — לחצו על הלינק:
-https://calendly.com/dj-steven-angel/phone?back=1
-For English press 3`;
+איך נוח לכם?
+
+1️⃣  לדבר על לימודי די.ג'י / הפקה
+3️⃣  Continue in English
+
+או לקפוץ ישר לשיחה עם סטיבן 👇
+https://calendly.com/dj-steven-angel/phone?back=1`;
+}
+
+// Soft reminder — sent ONCE 10 min after menu if user hasn't picked 1/3.
+// Replaces the previous behavior of re-sending the full menu (felt like a duplicate).
+function getMenuNudgeMessage() {
+    return `מחכים לכם 😊
+1️⃣ לימודים  |  3️⃣ English
+או לחצו ישירות על הלינק לשיחה עם סטיבן 👇
+https://calendly.com/dj-steven-angel/phone?back=1`;
 }
 
 // After pressing 1 — Hebrew lessons flow
@@ -527,16 +538,17 @@ async function checkNudges() {
 
         const meta = convMeta.get(chatId) || { status: 'active', language: null };
 
-        // ── MENU NUDGE: resend menu once after 10 min, then stop ─────────────
+        // ── MENU NUDGE: send a SHORT reminder once after 10 min, then stop ───
+        // (previously re-sent the full menu, which felt like a duplicate to the user)
         if (meta.status === 'menu') {
             if (now - lastAt >= NUDGE_DELAY_1) {
                 try {
-                    await sendGreenMessage(chatId, getMenuMessage());
+                    await sendGreenMessage(chatId, getMenuNudgeMessage());
                     meta.status = 'menu_nudged';
                     convMeta.set(chatId, meta);
                     lastBotReply.delete(chatId); // no more nudges after this
                     saveNudgeState();
-                    console.log(`📋 תפריט — nudge יחיד → ${chatId}`);
+                    console.log(`📋 תזכורת תפריט → ${chatId}`);
                 } catch (err) { console.error(`❌ Menu nudge failed (${chatId}):`, err.message); }
             }
             continue;
