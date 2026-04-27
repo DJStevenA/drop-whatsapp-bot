@@ -355,6 +355,11 @@ function getConversationLanguage(history) {
     return detectLanguage(firstUser?.content || '');
 }
 
+// Bitly short link for the Calendly phone call (with whatsapp/bot UTMs)
+// Created 2026-04-27 per Marketing Agent brief (briefs/2026-04-27/bitly_link_shortener_capability.md)
+// Long URL: https://calendly.com/dj-steven-angel/phone?back=1&utm_source=whatsapp&utm_medium=bot&utm_campaign=calendly-phone
+const CALENDLY_SHORT = 'https://bit.ly/48SkPqo';
+
 // Menu message — sent to ALL new contacts (no language detection needed)
 function getMenuMessage() {
     return `היי 😊 הגעתם למיני סטיבן 🎧
@@ -362,19 +367,19 @@ function getMenuMessage() {
 איך נוח לכם?
 
 1️⃣  לדבר על לימודי די.ג'י / הפקה
-3️⃣  Continue in English
-
-או לקפוץ ישר לשיחה עם סטיבן 👇
-https://calendly.com/dj-steven-angel/phone?back=1`;
+2️⃣  לקבוע שיחה עם סטיבן:
+👉 ${CALENDLY_SHORT}
+3️⃣  Continue in English`;
 }
 
-// Soft reminder — sent ONCE 10 min after menu if user hasn't picked 1/3.
+// Soft reminder — sent ONCE 10 min after menu if user hasn't picked an option.
 // Replaces the previous behavior of re-sending the full menu (felt like a duplicate).
 function getMenuNudgeMessage() {
-    return `מחכים לכם 😊
-1️⃣ לימודים  |  3️⃣ English
-או לחצו ישירות על הלינק לשיחה עם סטיבן 👇
-https://calendly.com/dj-steven-angel/phone?back=1`;
+    return `רק להזכיר את האפשרויות 😊
+
+1️⃣  לימודי די.ג'י / הפקה
+2️⃣  שיחה עם סטיבן: ${CALENDLY_SHORT}
+3️⃣  Continue in English`;
 }
 
 // After pressing 1 — Hebrew lessons flow
@@ -829,6 +834,17 @@ async function handleWebhook(data) {
             nudgeStage.delete(chatId);
             saveNudgeState();
             console.log(`📤 עברית → ${phoneNum}`);
+        } else if (choice === '2') {
+            // User typed 2 → wants to schedule a call. Resend the bitly link prominently.
+            // Keep status as menu/menu_nudged so they can still pick 1 or 3 later if needed.
+            const reply = `מעולה 🙌 לחצו לקביעת זמן שיחה עם סטיבן:\n👉 ${CALENDLY_SHORT}`;
+            history.push({ role: 'user', content: userText });
+            history.push({ role: 'assistant', content: reply });
+            saveConversations(conversations);
+            await sendGreenMessage(chatId, reply);
+            lastBotReply.set(chatId, Date.now());
+            saveNudgeState();
+            console.log(`📤 קלנדרי (bitly) → ${phoneNum}`);
         } else if (choice === '3') {
             meta.status = 'active';
             meta.language = 'en';
