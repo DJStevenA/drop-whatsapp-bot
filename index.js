@@ -411,31 +411,32 @@ const CALENDLY_1HR_LESSON  = 'https://bit.ly/4tuLvpq';   // 1hr production lesso
 // Long URL: https://calendly.com/dj-steven-angel/3hr-production-lesson-mentoring-prepaid-clone?utm_source=whatsapp&utm_medium=bot&utm_campaign=calendly-3hr-lesson
 const CALENDLY_3HR_LESSON  = 'https://bit.ly/3ON2eVN';   // 3hr production lesson ($120)
 
-// Menu message — sent to ALL new contacts (no language detection needed)
+// Menu message — sent to ALL new contacts (no language detection needed).
+// Verbatim text approved by Steven 2026-04-29 — no emojis (see feedback memory).
 function getMenuMessage() {
-    return `היי 😊 הגעתם למיני סטיבן 🎧
+    return `היי הגעתם למיני סטיבן.
+סטיבן הגדול עסוק עכשיו באולפן או מרים בקלאב.
+אשמח לענות לכם על שאלות בנתיים, איך תרצו להתקדם?
 
-איך נוח לכם?
-
-1️⃣  לדבר על לימודי די.ג'י / הפקה
-2️⃣  לקבוע שיחה עם סטיבן:
-👉 ${CALENDLY_SHORT}
-3️⃣  Continue in English`;
+1. לדבר על לימודי די.ג'י / הפקה
+2. לקבוע שיחה עם סטיבן: ${CALENDLY_SHORT}
+3. Continue in English`;
 }
 
-// Soft reminder — sent ONCE 10 min after menu if user hasn't picked an option.
-// Replaces the previous behavior of re-sending the full menu (felt like a duplicate).
+// (Legacy) Soft reminder — was previously sent 10 min after menu if user hadn't picked.
+// As of 2026-04-29 the auto menu-nudge is disabled (Steven's request). Kept here in case
+// we want to bring it back; checkNudges no longer calls this.
 function getMenuNudgeMessage() {
-    return `רק להזכיר את האפשרויות 😊
+    return `רק להזכיר את האפשרויות:
 
-1️⃣  לימודי די.ג'י / הפקה
-2️⃣  שיחה עם סטיבן: ${CALENDLY_SHORT}
-3️⃣  Continue in English`;
+1. לימודי די.ג'י / הפקה
+2. שיחה עם סטיבן: ${CALENDLY_SHORT}
+3. Continue in English`;
 }
 
 // After pressing 1 — Hebrew lessons flow
 function getHebrewFlowOpening() {
-    return `מגניב! 😊
+    return `מגניב.
 
 אני מיני סטיבן — אשמח לענות על שאלות ולעזור לך לקבוע זמן עם סטיבן.
 
@@ -453,20 +454,20 @@ What are you looking for — lessons, ghost production, or something else?`;
 
 function getUnsubMessage(language) {
     return language === 'en'
-        ? `You've been removed from our WhatsApp messages ✅\nYou won't receive any more messages from us.`
-        : `הוסרת מקבלת הודעות WhatsApp שלנו ✅\nלא תקבל/י הודעות נוספות.`;
+        ? `You've been removed from our WhatsApp messages.\nYou won't receive any more messages from us.`
+        : `הוסרת מקבלת הודעות WhatsApp שלנו.\nלא תקבל/י הודעות נוספות.`;
 }
 
 function getErrorFallbackMessage(language) {
     return language === 'en'
-        ? `Hey! Got your message 🙏
+        ? `Hey! Got your message.
 
-We're having a small technical hiccup right now. Steven will get back to you here within a few hours at most 🙏`
-        : `היי! קיבלנו את ההודעה שלך 🙏
+We're having a small technical hiccup right now. Steven will get back to you here within a few hours at most.`
+        : `היי, קיבלנו את ההודעה שלך.
 
 נראה שיש אצלנו תקלה טכנית רגעית.
 
-סטיבן יחזור אליך בהקדם — תוך שעות ספורות לכל היותר 🙏`;
+סטיבן יחזור אליך בהקדם — תוך שעות ספורות לכל היותר.`;
 }
 
 function getDirectInterestQuestion(language) {
@@ -477,22 +478,22 @@ function getDirectInterestQuestion(language) {
 
 function getNudgeMessage1(language) {
     return language === 'en'
-        ? `Hey! 😊 Just checking in — I'm still here if you have any questions about Steven's services or want to book a quick call`
-        : `היי! 😊 נראה שנעצרת — אני עדיין כאן אם יש לך שאלות על השיעורים עם סטיבן`;
+        ? `Hey, just checking in — I'm still here if you have any questions about Steven's services or want to book a quick call.`
+        : `היי, נראה שנעצרת — אני עדיין כאן אם יש לך שאלות על השיעורים עם סטיבן.`;
 }
 
 function getNudgeMessage2(name, language) {
     if (language === 'en') {
-        return `Hey${name ? ' ' + name : ''}! Mini Steven here 👋
+        return `Hey${name ? ' ' + name : ''}, Mini Steven here.
 
 Just wanted to follow up — are you still interested in working with Steven?
 
 If you'd like to book a quick 15-min Zoom call:
 ${CALENDLY_15MIN_ZOOM}`;
     }
-    return `היי${name ? ' ' + name : ''}! מיני סטיבן כאן 👋
+    return `היי${name ? ' ' + name : ''}, מיני סטיבן כאן.
 
-ראיתי שהתחלנו לדבר לפני כמה זמן — רציתי לבדוק אם עדיין מתעניינ/ת בשיעורים עם סטיבן 😊
+ראיתי שהתחלנו לדבר לפני כמה זמן — רציתי לבדוק אם עדיין מתעניינ/ת בשיעורים עם סטיבן.
 
 אם תרצ/י לקבוע שיחת הכרות קצרה של 15 דקות:
 ${CALENDLY_15MIN_ZOOM}`;
@@ -500,19 +501,19 @@ ${CALENDLY_15MIN_ZOOM}`;
 
 function getFollowupMessage(name, language) {
     if (language === 'en') {
-        return `Hey${name ? ' ' + name : ''}! Mini Steven here 👋
+        return `Hey${name ? ' ' + name : ''}, Mini Steven here.
 
 Just checking in — are you still interested in working with Steven?
 
-If you have questions, I'm here 😊
+If you have questions, I'm here.
 And if you'd like to book a quick call:
 ${CALENDLY_15MIN_ZOOM}`;
     }
-    return `היי${name ? ' ' + name : ''}! מיני סטיבן כאן 👋
+    return `היי${name ? ' ' + name : ''}, מיני סטיבן כאן.
 
 רק בדקתי אם עדיין מתעניינ/ת בשיעורים עם סטיבן?
 
-אם יש שאלות — אני כאן 😊
+אם יש שאלות — אני כאן.
 ואם תרצ/י לקבוע שיחה קצרה:
 ${CALENDLY_15MIN_ZOOM}`;
 }
@@ -608,18 +609,26 @@ async function checkNudges() {
 
         const meta = convMeta.get(chatId) || { status: 'active', language: null };
 
-        // ── MENU NUDGE: send a SHORT reminder once after 10 min, then stop ───
-        // (previously re-sent the full menu, which felt like a duplicate to the user)
+        // ── MENU NUDGE: DISABLED (Steven 2026-04-29).
+        // Previously: send a short reminder once after 10 min if the lead didn't pick.
+        // Now: do NOT message the lead. Just mark the conversation menu_nudged so we never
+        // touch it again, and emit a Railway log line so Steven can manually decide whether
+        // to follow up. (TODO: when ADMIN_PHONE env is set, send a WhatsApp alert to Steven
+        // with the lead's number + first message.)
         if (meta.status === 'menu') {
             if (now - lastAt >= NUDGE_DELAY_1) {
-                try {
-                    await sendGreenMessage(chatId, getMenuNudgeMessage());
-                    meta.status = 'menu_nudged';
-                    convMeta.set(chatId, meta);
-                    lastBotReply.delete(chatId); // no more nudges after this
-                    saveNudgeState();
-                    console.log(`📋 תזכורת תפריט → ${chatId}`);
-                } catch (err) { console.error(`❌ Menu nudge failed (${chatId}):`, err.message); }
+                meta.status = 'menu_nudged';
+                convMeta.set(chatId, meta);
+                lastBotReply.delete(chatId); // never auto-message this lead again
+                saveNudgeState();
+                const firstMsg = (conversations.get(chatId) || []).find(m => m?.role === 'user')?.content || '';
+                console.log(`📋 ליד לא בחר תפריט (10min) — לא נשלחת הודעה אוטומטית | ${chatId} | first: "${firstMsg.slice(0, 200)}"`);
+                if (process.env.ADMIN_PHONE) {
+                    const alert = `📋 ליד חדש לא בחר תפריט\nמספר: ${phoneNum}\nההודעה הראשונה: "${firstMsg.slice(0, 300)}"`;
+                    sendGreenMessage(process.env.ADMIN_PHONE + '@c.us', alert)
+                        .then(() => console.log(`📨 התראת אדמין נשלחה (menu skip): ${phoneNum}`))
+                        .catch(err => console.error(`❌ Admin alert failed (${chatId}):`, err.message));
+                }
             }
             continue;
         }
@@ -888,8 +897,20 @@ async function handleWebhook(data) {
     // CRM
     upsertLead({ phone: phoneNum, whatsapp_name: senderName, source: 'whatsapp' }).catch(()=>{});
 
-    // ── NEW CONTACT: send menu, wait for 1/3 ─────────────────────────────────
+    // ── NEW CONTACT: send menu, wait for 1/2/3 ───────────────────────────────
     if (isNew) {
+        // Green API contact-sync lag protection (Steven 2026-04-29):
+        // a number freshly saved in Steven's phone may not yet show as a contact in
+        // Green API for a few seconds. Wait, then re-check getContactInfo before
+        // committing to send the menu. Cost: ~7s delay on every new lead's first reply.
+        await new Promise(r => setTimeout(r, 7000));
+        const stillUnsaved = !(await isSavedContact(chatId));
+        if (!stillUnsaved) {
+            console.log(`👤 Saved contact (delayed re-check) — skipping: ${phoneNum}`);
+            processingLock.delete(chatId);
+            return;
+        }
+
         const menu = getMenuMessage();
         history.push({ role: 'user', content: userText });
         history.push({ role: 'assistant', content: menu });
