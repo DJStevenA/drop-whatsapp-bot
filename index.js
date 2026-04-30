@@ -3,7 +3,7 @@ const http  = require('http');
 const https = require('https');
 const fs    = require('fs');
 const path  = require('path');
-const { getAIResponse, isOffTopic } = require('./ai');
+const { getAIResponse, isOffTopic, generateHandoffSummary } = require('./ai');
 const { upsertLead, updateLead, getPendingFollowups, extractEmail } = require('./crm_client');
 
 // ── Green API config ──────────────────────────────────────────────────────────
@@ -40,6 +40,18 @@ async function isSavedContact(chatId) {
 }
 
 
+// Track every idMessage the bot has sent via Green API. Used by the outgoing-webhook
+// handoff handler to distinguish "Steven typed manually" from "echo of our own send".
+// Capped at the last 500 IDs (FIFO) so memory stays bounded.
+const botSentIds = new Set();
+function rememberBotSentId(id) {
+    if (!id) return;
+    botSentIds.add(id);
+    if (botSentIds.size > 500) {
+        botSentIds.delete(botSentIds.values().next().value);
+    }
+}
+
 async function sendGreenMessage(chatId, text) {
     // ── HARD GUARD: never message a blocked (unsubscribed) number, no matter who's asking.
     // This is the single chokepoint for ALL outbound WhatsApp messages — nudges, follow-ups,
@@ -62,7 +74,15 @@ async function sendGreenMessage(chatId, text) {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
         }, (res) => {
-            let d = ''; res.on('data', c => d += c); res.on('end', () => resolve(d));
+            let d = ''; res.on('data', c => d += c); res.on('end', () => {
+                // Parse response and remember our idMessage so the outgoing webhook can
+                // tell our own sends apart from Steven typing manually.
+                try {
+                    const parsed = JSON.parse(d);
+                    rememberBotSentId(parsed?.idMessage);
+                } catch {}
+                resolve(d);
+            });
         });
         req.on('error', reject);
         req.write(body); req.end();
@@ -609,6 +629,14 @@ async function checkNudges() {
 
         const meta = convMeta.get(chatId) || { status: 'active', language: null };
 
+        // Handoff state — Steven owns the thread; never auto-message
+        if (meta.status === 'human') {
+            lastBotReply.delete(chatId);
+            nudgeStage.delete(chatId);
+            saveNudgeState();
+            continue;
+        }
+
         // ── MENU NUDGE: DISABLED (Steven 2026-04-29).
         // Previously: send a short reminder once after 10 min if the lead didn't pick.
         // Now: do NOT message the lead. Just mark the conversation menu_nudged so we never
@@ -689,6 +717,11 @@ async function sendPendingFollowups() {
             const lstatus = convMeta.get(chatId)?.status;
             if (lstatus === 'menu' || lstatus === 'menu_nudged') {
                 console.log(`📋 פולו-אפ דולג — עדיין בתפריט (${lstatus}): ${lead.phone}`);
+                continue;
+            }
+            // Skip leads where Steven took over manually
+            if (lstatus === 'human') {
+                console.log(`👋 פולו-אפ דולג — סטיבן בשיחה: ${lead.phone}`);
                 continue;
             }
             // Skip if a webhook is currently processing this chat
@@ -812,8 +845,92 @@ async function scanForCRMData(phone, userText, history = []) {
     if (Object.keys(updates).length > 0) await updateLead(phone, updates);
 }
 
+// ── Outgoing-message handler (Steven manually replying via WhatsApp app) ─────
+// Fires when the bot's own WhatsApp account sends a message NOT via our Green API
+// call (e.g. Steven typed in WhatsApp Web while logged into the bot's account).
+// We distinguish these from echoes of our own API sends by checking idMessage
+// against botSentIds (every API send is recorded there in sendGreenMessage).
+async function handleOutgoingMessage(data) {
+    const ALLOWED = ['textMessage', 'extendedTextMessage', 'imageMessage'];
+    if (!data.messageData || !ALLOWED.includes(data.messageData.typeMessage)) return;
+
+    const chatId = data.senderData?.chatId;
+    const msgId  = data.idMessage;
+    const text   = (
+        data.messageData?.textMessageData?.textMessage ||
+        data.messageData?.extendedTextMessageData?.text ||
+        data.messageData?.imageMessage?.caption ||
+        ''
+    ).trim();
+
+    if (!chatId || !msgId) return;
+    if (chatId.endsWith('@g.us')) return;             // ignore groups
+
+    // Echo of our own API send → ignore
+    if (botSentIds.has(msgId)) return;
+
+    // Not a chat the bot manages → ignore
+    if (!conversations.has(chatId)) return;
+
+    const meta = convMeta.get(chatId) || { status: 'active', language: null };
+    if (meta.status === 'human') return;              // already handed off
+
+    // Lock to avoid races with checkNudges or duplicate webhooks
+    if (processingLock.has(chatId)) {
+        console.log(`⏳ Outgoing handoff: chat ${chatId} busy, will catch on next manual msg`);
+        return;
+    }
+    processingLock.add(chatId);
+
+    try {
+        const phoneNum = chatId.replace('@c.us', '').replace(/\D/g, '');
+        console.log(`👋 Steven joined → handoff: ${chatId} | manual: "${(text || '<no text>').slice(0, 80)}"`);
+
+        const history  = conversations.get(chatId) || [];
+        const language = meta.language || getConversationLanguage(history);
+
+        // Build summary off the bot↔lead history (excluding Steven's just-typed message —
+        // it's not in `history` yet and that's intentional; the summary is FOR Steven).
+        const summary = await generateHandoffSummary(history, language);
+
+        if (summary) {
+            await sendGreenMessage(chatId, summary);
+            // Don't append summary to history — once handoff happens we never run the
+            // bot's AI on this chat again, so history maintenance stops here.
+            console.log(`📝 Handoff summary sent → ${phoneNum}`);
+        } else {
+            console.warn(`⚠️ Handoff summary generation returned null → ${chatId}`);
+        }
+
+        // Flip status to 'human' — bot stops engaging this thread (incoming, nudges, follow-ups)
+        convMeta.set(chatId, { ...meta, status: 'human' });
+        nudgeStage.delete(chatId);
+        lastBotReply.delete(chatId);
+        saveNudgeState();
+
+        updateLead(phoneNum, {
+            status: 'contacted',
+            notes: `סטיבן נכנס לשיחה ידנית — הבוט פינה ${new Date().toLocaleString('he-IL')}`,
+        }).catch(()=>{});
+
+        console.log(`✅ Handoff complete → ${phoneNum} (status=human)`);
+    } catch (err) {
+        console.error(`❌ Handoff failed for ${chatId}:`, err.message);
+    } finally {
+        processingLock.delete(chatId);
+    }
+}
+
 // ── Webhook handler ───────────────────────────────────────────────────────────
 async function handleWebhook(data) {
+    // Outgoing webhook variants — Steven manually replied (or our own API send echoed back).
+    // Filter out status-only events and route to the handoff handler.
+    if (typeof data.typeWebhook === 'string'
+        && data.typeWebhook.startsWith('outgoing')
+        && data.typeWebhook !== 'outgoingMessageStatus') {
+        return handleOutgoingMessage(data);
+    }
+
     // Only handle incoming messages (text, extended text, images with caption)
     if (data.typeWebhook !== 'incomingMessageReceived') return;
     const ALLOWED_TYPES = ['textMessage', 'extendedTextMessage', 'imageMessage'];
@@ -842,6 +959,12 @@ async function handleWebhook(data) {
 
     // Silenced (off-topic conversation — bot stopped engaging)
     if (silenced.has(chatId)) return;
+
+    // Handoff state — Steven joined this thread manually; bot stays out for good
+    if (convMeta.get(chatId)?.status === 'human') {
+        console.log(`👋 שיחה הועברה לסטיבן — הבוט שותק: ${phoneNum}`);
+        return;
+    }
 
     // Fast check: contactName in webhook payload — no API call needed
     if (data.senderData?.contactName) {
