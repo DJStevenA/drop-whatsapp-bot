@@ -126,7 +126,18 @@ const PORT = process.env.PORT || 3000;
 const server = http.createServer(async (req, res) => {
     const urlObj = new URL(req.url, `http://localhost`);
 
-    // Health check — used by UptimeRobot / Railway
+    // Liveness probe — Railway healthcheck. ALWAYS returns 200 if the process is up,
+    // independent of Green API state. Use this for Railway's healthcheckPath so a
+    // transient Green API hiccup doesn't trigger unnecessary container restarts.
+    if (req.method === 'GET' && urlObj.pathname === '/alive') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, uptime_seconds: Math.floor(process.uptime()) }));
+        return;
+    }
+
+    // Health check — used by UptimeRobot / external monitors. Returns 503 when degraded
+    // (e.g. Green API not authorized) so monitors can alert. Do NOT use for Railway
+    // healthcheckPath — Railway should look at /alive instead.
     if (req.method === 'GET' && urlObj.pathname === '/health') {
         // Test Green API connectivity with a lightweight status call
         const statusUrl = `${GREEN_URL}/waInstance${GREEN_INSTANCE}/getStateInstance/${GREEN_TOKEN}`;
