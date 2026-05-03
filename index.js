@@ -3,7 +3,7 @@ const http  = require('http');
 const https = require('https');
 const fs    = require('fs');
 const path  = require('path');
-const { getAIResponse, isOffTopic, generateHandoffSummary } = require('./ai');
+const { getAIResponse, isOffTopic } = require('./ai');
 const { upsertLead, updateLead, getPendingFollowups, extractEmail } = require('./crm_client');
 
 // ── Green API config ──────────────────────────────────────────────────────────
@@ -897,23 +897,8 @@ async function handleOutgoingMessage(data) {
         const phoneNum = chatId.replace('@c.us', '').replace(/\D/g, '');
         console.log(`👋 Steven joined → handoff: ${chatId} | manual: "${(text || '<no text>').slice(0, 80)}"`);
 
-        const history  = conversations.get(chatId) || [];
-        const language = meta.language || getConversationLanguage(history);
-
-        // Build summary off the bot↔lead history (excluding Steven's just-typed message —
-        // it's not in `history` yet and that's intentional; the summary is FOR Steven).
-        const summary = await generateHandoffSummary(history, language);
-
-        if (summary) {
-            await sendGreenMessage(chatId, summary);
-            // Don't append summary to history — once handoff happens we never run the
-            // bot's AI on this chat again, so history maintenance stops here.
-            console.log(`📝 Handoff summary sent → ${phoneNum}`);
-        } else {
-            console.warn(`⚠️ Handoff summary generation returned null → ${chatId}`);
-        }
-
-        // Flip status to 'human' — bot stops engaging this thread (incoming, nudges, follow-ups)
+        // Flip status to 'human' — bot stops engaging this thread (incoming, nudges, follow-ups).
+        // No recap message is sent to the lead (Steven 2026-05-03).
         convMeta.set(chatId, { ...meta, status: 'human' });
         nudgeStage.delete(chatId);
         lastBotReply.delete(chatId);
