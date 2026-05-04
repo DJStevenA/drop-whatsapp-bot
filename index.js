@@ -699,7 +699,13 @@ async function checkNudges() {
         }
     }
 }
-setInterval(checkNudges, 60 * 1000);
+// ── ALL AUTO-FOLLOW-UP DISABLED (Steven 2026-05-04) ───────────────────────────
+// Steven's rule: the bot answers when written to. It NEVER initiates a message.
+// No menu nudge (already disabled 2026-04-29), no Nudge 1, no Nudge 2, no CRM
+// follow-ups. Functions are kept defined so they can be revived behind an env
+// var later, but neither setInterval nor any callsite is wired anymore.
+//
+// (intentional no-op) setInterval(checkNudges, 60 * 1000);
 
 // ── Follow-up ─────────────────────────────────────────────────────────────────
 // (FOLLOWUP_MSG moved to bilingual helper above: getFollowupMessage(name, language))
@@ -755,10 +761,12 @@ async function sendPendingFollowups() {
         }
     }
 }
-if (process.env.CRM_API_URL && !process.env.CRM_API_URL.includes('YOUR-APP')) {
-    setInterval(sendPendingFollowups, 60 * 60 * 1000);
-    sendPendingFollowups();
-}
+// CRM follow-ups DISABLED (Steven 2026-05-04). Bot only replies when written to.
+// Function kept defined above for possible future use. Re-enable by uncommenting:
+//   if (process.env.CRM_API_URL && !process.env.CRM_API_URL.includes('YOUR-APP')) {
+//       setInterval(sendPendingFollowups, 60 * 60 * 1000);
+//       sendPendingFollowups();
+//   }
 
 // ── Name / genre / gender helpers ─────────────────────────────────────────────
 const NOT_A_NAME = new Set([
