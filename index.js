@@ -40,6 +40,44 @@ async function isSavedContact(chatId) {
 }
 
 
+// ── Steven-initiated chat check ───────────────────────────────────────────────
+// Returns true if Green API's WhatsApp chat history shows ANY outgoing message
+// for this chat. Only meaningful to call when `conversations.has(chatId)` is
+// false: in that case the bot has no record of ever replying here, so any
+// outgoing message visible in WhatsApp's history must be Steven's manual send.
+// When true, the bot must stay out of the thread (set convMeta.status='human').
+//
+// Safe defaults: on error/timeout/parse failure → return false (= "didn't
+// initiate"). This keeps the bot AVAILABLE on Green API hiccups instead of
+// silencing it for every new lead. Trade-off accepted: a transient Green API
+// error will let the bot engage on a chat where Steven actually initiated.
+async function didStevenInitiate(chatId) {
+    const url  = `${GREEN_URL}/waInstance${GREEN_INSTANCE}/getChatHistory/${GREEN_TOKEN}`;
+    const body = JSON.stringify({ chatId, count: 20 });
+    return new Promise((resolve) => {
+        const u = new URL(url);
+        const req = https.request({
+            hostname: u.hostname, path: u.pathname,
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+            timeout: 5000,
+        }, (res) => {
+            let d = ''; res.on('data', c => d += c);
+            res.on('end', () => {
+                try {
+                    const arr = JSON.parse(d);
+                    if (!Array.isArray(arr)) return resolve(false);
+                    resolve(arr.some(m => m && m.type === 'outgoing'));
+                } catch { resolve(false); }  // parse error → safe default: don't block engagement
+            });
+        });
+        req.on('error',   () => resolve(false));
+        req.on('timeout', () => { req.destroy(); resolve(false); });
+        req.write(body); req.end();
+    });
+}
+
+
 // Track every idMessage the bot has sent via Green API. Used by the outgoing-webhook
 // handoff handler to distinguish "Steven typed manually" from "echo of our own send".
 // Capped at the last 500 IDs (FIFO) so memory stays bounded.
@@ -981,6 +1019,21 @@ async function handleWebhook(data) {
     if (saved) {
         console.log(`👤 Saved contact (API) — skipping: ${phoneNum}`);
         return;
+    }
+
+    // Steven-initiated check (Steven 2026-05-07): if the bot has no history
+    // with this chat but Green API's WhatsApp history shows Steven already sent
+    // an outbound message there, mark status='human' and stay out forever. This
+    // lets the bot ignore replies on threads Steven started manually — even for
+    // numbers not saved as contacts. See memory/feedback_steven_initiated_chats.md.
+    if (!conversations.has(chatId)) {
+        const stevenStarted = await didStevenInitiate(chatId);
+        if (stevenStarted) {
+            convMeta.set(chatId, { status: 'human', language: null });
+            saveNudgeState();
+            console.log(`👤 Steven initiated this chat in WhatsApp — bot silent: ${phoneNum}`);
+            return;
+        }
     }
 
 
