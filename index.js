@@ -664,6 +664,21 @@ function getNameFromHistory(chatId) {
     return null;
 }
 
+// ── checkNudges (Steven 2026-05-08): single 24h follow-up rule ───────────────
+// Only ONE outbound is allowed and only for active conversations:
+//   - Lead picked from the menu (status='active')
+//   - Lead replied at least once after picking
+//   - Bot replied last and the lead has been silent
+//   - 24h-48h after the bot's last reply: send getNudgeMessage2(name, language)
+//   - After firing: stage=2, never auto-message this chat again
+// All other states get NO outbound:
+//   - status='menu' / 'menu_nudged' — admin alert path is preserved (no message to lead)
+//   - status='human' — handed off, bot is silent forever
+//   - More than 48h since last bot reply — too stale, drop without sending
+// CRM-driven follow-ups (sendPendingFollowups) stay disabled.
+const FOLLOWUP_AFTER_MS  = 24 * 60 * 60 * 1000;       // 24h — earliest fire
+const FOLLOWUP_WINDOW_MS = 48 * 60 * 60 * 1000;       // 48h — latest fire (stale after)
+
 async function checkNudges() {
     const now = Date.now();
     for (const [chatId, lastAt] of lastBotReply.entries()) {
@@ -673,7 +688,6 @@ async function checkNudges() {
         if (BLOCKED.has(phoneNum)) { lastBotReply.delete(chatId); nudgeStage.delete(chatId); saveNudgeState(); continue; }
 
         // Skip if a webhook is currently processing this chat — avoids racing with handleWebhook
-        // (e.g. user just replied "1" and we'd send a duplicate nudge on top of the opening)
         if (processingLock.has(chatId)) continue;
 
         const meta = convMeta.get(chatId) || { status: 'active', language: null };
@@ -686,12 +700,10 @@ async function checkNudges() {
             continue;
         }
 
-        // ── MENU NUDGE: DISABLED (Steven 2026-04-29).
-        // Previously: send a short reminder once after 10 min if the lead didn't pick.
-        // Now: do NOT message the lead. Just mark the conversation menu_nudged so we never
-        // touch it again, and emit a Railway log line so Steven can manually decide whether
-        // to follow up. (TODO: when ADMIN_PHONE env is set, send a WhatsApp alert to Steven
-        // with the lead's number + first message.)
+        // ── MENU SKIP (Steven 2026-04-29 / re-confirmed 2026-05-08) ──────────
+        // Lead got the menu and never picked. NO message to the lead. Flip
+        // status to 'menu_nudged' once and (optionally) WhatsApp Steven via
+        // ADMIN_PHONE so he can decide manually.
         if (meta.status === 'menu') {
             if (now - lastAt >= NUDGE_DELAY_1) {
                 meta.status = 'menu_nudged';
@@ -710,40 +722,40 @@ async function checkNudges() {
             continue;
         }
 
-        // ── ACTIVE CONVERSATION NUDGE (2 stages: 10min + 24h) ────────────────
+        // Anything that's not an active conversation gets no follow-up.
         if (meta.status !== 'active' && meta.status !== null && meta.status !== undefined) continue;
 
-        const state = nudgeStage.get(chatId) || { stage: 0, nudge1At: null };
+        const state = nudgeStage.get(chatId) || { stage: 0 };
+        if (state.stage >= 2) continue;                  // already followed up — done forever
+
+        const elapsed = now - lastAt;
+        if (elapsed < FOLLOWUP_AFTER_MS) continue;        // not yet 24h
+        if (elapsed > FOLLOWUP_WINDOW_MS) {                // missed the window — clean up silently
+            nudgeStage.set(chatId, { stage: 2, sentAt: 0 });
+            lastBotReply.delete(chatId);
+            saveNudgeState();
+            console.log(`⌛ Follow-up window missed (${Math.round(elapsed/3600000)}h since last reply) — dropping ${chatId}`);
+            continue;
+        }
+
+        // Fire the single 24h follow-up.
         const history  = conversations.get(chatId) || [];
         const language = meta.language || getConversationLanguage(history);
-
-        if (state.stage === 0 && now - lastAt >= NUDGE_DELAY_1) {
-            try {
-                await sendGreenMessage(chatId, getNudgeMessage1(language));
-                nudgeStage.set(chatId, { stage: 1, nudge1At: Date.now() });
-                saveNudgeState();
-                console.log(`💬 Nudge 1 (${language}) → ${chatId}`);
-            } catch (err) { console.error(`❌ Nudge 1 failed (${chatId}):`, err.message); }
-
-        } else if (state.stage === 1 && state.nudge1At && now - state.nudge1At >= NUDGE_DELAY_2) {
-            const name = getNameFromHistory(chatId);
-            try {
-                await sendGreenMessage(chatId, getNudgeMessage2(name, language));
-                nudgeStage.set(chatId, { stage: 2, nudge1At: state.nudge1At });
-                lastBotReply.delete(chatId);
-                saveNudgeState();
-                console.log(`💬 Nudge 2 (${language}) → ${chatId}`);
-            } catch (err) { console.error(`❌ Nudge 2 failed (${chatId}):`, err.message); }
+        const name     = getNameFromHistory(chatId);
+        try {
+            await sendGreenMessage(chatId, getNudgeMessage2(name, language));
+            nudgeStage.set(chatId, { stage: 2, sentAt: Date.now() });
+            lastBotReply.delete(chatId);                  // never auto-message this lead again
+            saveNudgeState();
+            console.log(`💬 Single 24h follow-up (${language}) → ${chatId}`);
+        } catch (err) {
+            console.error(`❌ 24h follow-up failed (${chatId}):`, err.message);
         }
     }
 }
-// ── ALL AUTO-FOLLOW-UP DISABLED (Steven 2026-05-04) ───────────────────────────
-// Steven's rule: the bot answers when written to. It NEVER initiates a message.
-// No menu nudge (already disabled 2026-04-29), no Nudge 1, no Nudge 2, no CRM
-// follow-ups. Functions are kept defined so they can be revived behind an env
-// var later, but neither setInterval nor any callsite is wired anymore.
-//
-// (intentional no-op) setInterval(checkNudges, 60 * 1000);
+// Active — runs once a minute. Single 24h follow-up rule only; CRM follow-ups
+// stay disabled (see sendPendingFollowups block below).
+setInterval(checkNudges, 60 * 1000);
 
 // ── Follow-up ─────────────────────────────────────────────────────────────────
 // (FOLLOWUP_MSG moved to bilingual helper above: getFollowupMessage(name, language))
