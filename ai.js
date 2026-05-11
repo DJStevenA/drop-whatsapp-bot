@@ -65,4 +65,39 @@ Reply with exactly one word: "relevant" or "not_relevant".
     }
 }
 
-module.exports = { getAIResponse, isOffTopic };
+// Triage the FIRST incoming WhatsApp message from a new lead.
+// Replaces the legacy 1/2/3 menu (dropped 2026-05-11 per Steven): if the message
+// is plausibly about Steven's services we engage directly; if it's clearly
+// off-topic we stay silent and ping admin.
+// Returns { interested: boolean, language: 'he' | 'en' }.
+// Biased toward 'interested' — a bare "היי" / "hi" counts as a lead. Only
+// label not_interested when it's clearly spam, wrong number, or unrelated.
+async function classifyNewLead(text) {
+    try {
+        const res = await anthropic.messages.create({
+            model: 'claude-haiku-4-5-20251001',
+            max_tokens: 30,
+            system: `You triage the FIRST WhatsApp message to Steven Angel — a DJ-lessons and music-production teacher in Israel.
+
+Output EXACTLY two tokens separated by a single space and nothing else:
+<interested|not_interested> <he|en>
+
+interested = the sender plausibly wants Steven's services (DJ lessons, music production, studio time, prices, scheduling, ghost production, mentoring, Ableton help), OR is a generic greeting / opener ("היי", "שלום", "hi", "hello", "מה קורה"). Default to interested when ambiguous.
+not_interested = clearly off-topic: spam, wrong number, unrelated B2B pitch, recruiter, vendor, another bot, mass-marketing blast.
+
+The language token reflects the language of the sender's message ('he' for Hebrew, 'en' for English; pick 'he' if mixed/unclear).`,
+            messages: [{ role: 'user', content: text }],
+        });
+        const raw = (res.content[0].text || '').trim().toLowerCase();
+        const [intentTok, langTok] = raw.split(/\s+/);
+        return {
+            interested: intentTok !== 'not_interested',
+            language:   langTok === 'en' ? 'en' : 'he',
+        };
+    } catch (err) {
+        console.error('❌ classifyNewLead failed:', err.message);
+        return { interested: true, language: 'he' }; // safe default: engage
+    }
+}
+
+module.exports = { getAIResponse, isOffTopic, classifyNewLead };

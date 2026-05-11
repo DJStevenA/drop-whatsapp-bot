@@ -3,7 +3,7 @@ const http  = require('http');
 const https = require('https');
 const fs    = require('fs');
 const path  = require('path');
-const { getAIResponse, isOffTopic } = require('./ai');
+const { getAIResponse, isOffTopic, classifyNewLead } = require('./ai');
 const { upsertLead, updateLead, getPendingFollowups, extractEmail } = require('./crm_client');
 
 // ── Green API config ──────────────────────────────────────────────────────────
@@ -753,9 +753,10 @@ async function checkNudges() {
         }
     }
 }
-// Active — runs once a minute. Single 24h follow-up rule only; CRM follow-ups
-// stay disabled (see sendPendingFollowups block below).
-setInterval(checkNudges, 60 * 1000);
+// All auto-outreach DISABLED (Steven 2026-05-11): no nudges, no 24h follow-ups,
+// no CRM follow-ups. The bot only replies when written to. checkNudges is kept
+// defined (above) and re-enable-able by uncommenting:
+//   setInterval(checkNudges, 60 * 1000);
 
 // ── Follow-up ─────────────────────────────────────────────────────────────────
 // (FOLLOWUP_MSG moved to bilingual helper above: getFollowupMessage(name, language))
@@ -1020,6 +1021,12 @@ async function handleWebhook(data) {
         return;
     }
 
+    // Triaged as not-relevant on first message (Steven 2026-05-11): bot stays silent forever.
+    if (convMeta.get(chatId)?.status === 'ignored') {
+        console.log(`🤐 שיחה סווגה כלא רלוונטית — הבוט שותק: ${phoneNum}`);
+        return;
+    }
+
     // Fast check: contactName in webhook payload — no API call needed
     if (data.senderData?.contactName) {
         console.log(`👤 Saved contact (webhook) — skipping: ${phoneNum}`);
@@ -1089,12 +1096,15 @@ async function handleWebhook(data) {
     // CRM
     upsertLead({ phone: phoneNum, whatsapp_name: senderName, source: 'whatsapp' }).catch(()=>{});
 
-    // ── NEW CONTACT: send menu, wait for 1/2/3 ───────────────────────────────
+    // ── NEW CONTACT: classify intent, engage if relevant ─────────────────────
+    // Steven 2026-05-11: legacy 1/2/3 menu dropped — Haiku triages the first
+    // message instead. Interested leads (incl. plain greetings) jump straight
+    // into the Hebrew/English flow; off-topic / spam stays silent + admin alert.
     if (isNew) {
         // Green API contact-sync lag protection (Steven 2026-04-29):
         // a number freshly saved in Steven's phone may not yet show as a contact in
         // Green API for a few seconds. Wait, then re-check getContactInfo before
-        // committing to send the menu. Cost: ~7s delay on every new lead's first reply.
+        // committing to engage. Cost: ~7s delay on every new lead's first reply.
         await new Promise(r => setTimeout(r, 7000));
         const stillUnsaved = !(await isSavedContact(chatId));
         if (!stillUnsaved) {
@@ -1103,15 +1113,34 @@ async function handleWebhook(data) {
             return;
         }
 
-        const menu = getMenuMessage();
         history.push({ role: 'user', content: userText });
-        history.push({ role: 'assistant', content: menu });
-        convMeta.set(chatId, { status: 'menu', language: null });
+
+        const { interested, language } = await classifyNewLead(userText);
+
+        if (!interested) {
+            convMeta.set(chatId, { status: 'ignored', language: null });
+            saveConversations(conversations);
+            lastBotReply.delete(chatId);
+            saveNudgeState();
+            console.log(`🤐 ליד לא רלוונטי — שקט | ${phoneNum} | "${userText.slice(0, 200)}"`);
+            if (process.env.ADMIN_PHONE) {
+                const alert = `🤐 ליד חדש סווג כלא רלוונטי\nמספר: ${phoneNum}\nההודעה: "${userText.slice(0, 300)}"`;
+                sendGreenMessage(process.env.ADMIN_PHONE + '@c.us', alert)
+                    .then(() => console.log(`📨 התראת אדמין נשלחה (off-topic): ${phoneNum}`))
+                    .catch(err => console.error(`❌ Admin alert failed (${chatId}):`, err.message));
+            }
+            processingLock.delete(chatId);
+            return;
+        }
+
+        const opening = language === 'en' ? getEnglishFlowOpening() : getHebrewFlowOpening();
+        history.push({ role: 'assistant', content: opening });
+        convMeta.set(chatId, { status: 'active', language });
         saveConversations(conversations);
-        await sendGreenMessage(chatId, menu);
+        await sendGreenMessage(chatId, opening);
         lastBotReply.set(chatId, Date.now());
         saveNudgeState();
-        console.log(`📤 תפריט נשלח → ${phoneNum}`);
+        console.log(`📤 פתיחה (${language}) → ${phoneNum}`);
         processingLock.delete(chatId);
         return;
     }
