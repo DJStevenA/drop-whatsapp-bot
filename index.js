@@ -209,6 +209,36 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
+    // Admin reset: wipes conversations + all nudge_state in memory and on disk.
+    // blocked.json is INTENTIONALLY NOT TOUCHED — see feedback_unsubscribe_hard_rule.
+    // Usage: POST /admin/reset?key=drop2026secret&confirm=YES
+    if (req.method === 'POST' && urlObj.pathname === '/admin/reset') {
+        if (urlObj.searchParams.get('key') !== 'drop2026secret') { res.writeHead(403); res.end('forbidden'); return; }
+        if (urlObj.searchParams.get('confirm') !== 'YES') { res.writeHead(400); res.end('need confirm=YES'); return; }
+        const cleared = {
+            conversations: conversations.size,
+            lastBotReply: lastBotReply.size,
+            nudgeStage: nudgeStage.size,
+            offTopicCount: offTopicCount.size,
+            silenced: silenced.size,
+            convMeta: convMeta.size,
+        };
+        conversations.clear();
+        lastBotReply.clear();
+        nudgeStage.clear();
+        offTopicCount.clear();
+        silenced.clear();
+        convMeta.clear();
+        processedIds.clear();
+        botSentIds.clear();
+        saveConversations(conversations);
+        saveNudgeState();
+        console.log(`🧹 ADMIN RESET — cleared: ${JSON.stringify(cleared)} | blocked.json preserved (${BLOCKED.size} entries)`);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, cleared, preserved: { blocked: BLOCKED.size } }));
+        return;
+    }
+
     // Self-test: simulates a real message end-to-end (Claude + Green API)
     if (req.method === 'GET' && urlObj.pathname === '/selftest') {
         if (urlObj.searchParams.get('key') !== 'drop2026secret') { res.writeHead(403); res.end('forbidden'); return; }
